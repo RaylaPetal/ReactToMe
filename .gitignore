@@ -2,3 +2,10 @@
 obj/
 bin/
 *.user
+
+# Claude Code / OpenSpec tooling scaffolding: personal AI-assistant config,
+# regenerable via the openspec CLI, not part of the plugin itself
+.claude/settings.local.json
+.claude/commands/
+.claude/skills/
+.agents/

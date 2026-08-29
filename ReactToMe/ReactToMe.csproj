@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Version>0.0.0.1</Version>
+    <!-- Manifest fields (see https://github.com/goatcorp/DalamudPackager/blob/827d88dc/DalamudPackager/DalamudPackager.cs#L420) -->
+    <Author>Rayla Petal</Author>
+    <Name>ReactToMe</Name>
+    <Punchline>Reacts to emotes performed on you with a temporary Glamourer design and Moodle.</Punchline>
+    <Description>Listens for emotes targeted at you and applies a configured Glamourer design and Moodles status in response, automatically reverting the Glamourer design after a set duration.</Description>
+    <RepoUrl>https://github.com/tnascimbeni/ReactToMe</RepoUrl>
+    <Tags>emote;glamourer;moodles;automation</Tags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Glamourer.Api" Version="2.8.2" />
+    <PackageReference Include="ECommons" Version="3.2.1.1" />
+  </ItemGroup>
+</Project>
