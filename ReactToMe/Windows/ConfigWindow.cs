@@ -470,7 +470,11 @@ public class ConfigWindow : Window, IDisposable
         DrawPenumbraStages(trigger);
 
         if (!trigger.HasAnyAction)
-            ImGui.TextColored(new Vector4(1f, 0.85f, 0.3f, 1f), "Select a Glamourer design, a Moodle, a chat message, a gesture, and/or a Penumbra mod — this trigger won't do anything otherwise.");
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.85f, 0.3f, 1f));
+            ImGui.TextWrapped("Select a Glamourer design, a Moodle, a chat message, a gesture, and/or a Penumbra mod — this trigger won't do anything otherwise.");
+            ImGui.PopStyleColor();
+        }
     }
 
     private void DrawTimingSection(ReactionTrigger trigger)
@@ -549,93 +553,149 @@ public class ConfigWindow : Window, IDisposable
         }
     }
 
-    /// <summary>Draws the staged-Penumbra-mod section for a trigger: a list of fire-count thresholds, each
-    /// independently naming its own mod, option group, and option — so the same trigger can escalate within
-    /// one mod's option group, across different groups of one mod, or across entirely different mods.</summary>
+    /// <summary>Draws the Penumbra reaction section for a trigger: a None/Single/Staged mode choice that
+    /// gates which fields are shown — no fields for None, flat mod/option pickers for Single (applied on
+    /// first fire, no escalation), or the tabbed fire-count-threshold editor for Staged.</summary>
     private void DrawPenumbraStages(ReactionTrigger trigger)
     {
-        ImGui.TextDisabled("Penumbra stages (fire count -> mod/option; highest threshold reached wins)");
+        ImGui.TextDisabled("Penumbra reaction");
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Firing this trigger while already active increases its fire count (capped at 20, FFXIV's own debuff stack limit). Each stage can target its own mod, option group, and option. When the resolved stage's mod differs from the previous one, the previous mod is disabled first. The trigger's timer (or manual force-revert) disables whichever mod is currently active.");
+            ImGui.SetTooltip("No mod reaction, a single mod/option applied on this trigger's first fire, or a fire-count-staged escalation across up to 20 stacks (FFXIV's own debuff stack limit) where each stage can target its own mod, option group, and option.");
 
-        var removeIndex = -1;
-        for (var s = 0; s < trigger.PenumbraStages.Count; s++)
+        var effectiveMode = trigger.GetEffectivePenumbraMode();
+        if (effectiveMode != trigger.PenumbraReactionMode)
         {
-            var stage = trigger.PenumbraStages[s];
-            ImGui.PushID(s);
-            ImGui.Indent();
-
-            ImGui.SetNextItemWidth(80);
-            var threshold = stage.Threshold;
-            if (ImGui.InputInt("Fire count", ref threshold))
-            {
-                stage.Threshold = Math.Clamp(threshold, 1, ActiveEffectRegistry.MaxPenumbraFireCount);
-                configuration.Save();
-            }
-
-            ImGui.SameLine();
-            if (ImGui.Button("Remove##removeStage"))
-                removeIndex = s;
-
-            if (DrawSearchablePicker("Mod", $"{trigger.Id}-penumbra-stage-{s}-mod", penumbraMods, stage.ModDirectory, string.Empty, out var newModDirectory))
-            {
-                stage.ModDirectory = newModDirectory;
-                stage.ModName = newModDirectory.Length > 0 && penumbraMods.TryGetValue(newModDirectory, out var newModName)
-                    ? newModName
-                    : string.Empty;
-                stage.OptionGroupName = string.Empty;
-                stage.OptionName = string.Empty;
-                configuration.Save();
-            }
-
-            if (stage.ModDirectory.Length > 0)
-            {
-                var groupSettings = GetPenumbraModSettings(stage.ModDirectory, stage.ModName);
-
-                var groupPreview = stage.OptionGroupName.Length > 0 ? stage.OptionGroupName : "(None)";
-                if (ImGui.BeginCombo("Option group", groupPreview))
-                {
-                    foreach (var groupName in groupSettings.Keys.OrderBy(g => g, StringComparer.OrdinalIgnoreCase))
-                    {
-                        if (ImGui.Selectable(groupName, groupName == stage.OptionGroupName))
-                        {
-                            stage.OptionGroupName = groupName;
-                            stage.OptionName = string.Empty;
-                            configuration.Save();
-                        }
-                    }
-
-                    ImGui.EndCombo();
-                }
-
-                if (stage.OptionGroupName.Length > 0 && groupSettings.TryGetValue(stage.OptionGroupName, out var groupInfo))
-                {
-                    var optionPreview = stage.OptionName.Length > 0 ? stage.OptionName : "(None)";
-                    if (ImGui.BeginCombo("Option", optionPreview))
-                    {
-                        foreach (var optionName in groupInfo.Options)
-                        {
-                            if (ImGui.Selectable(optionName, optionName == stage.OptionName))
-                            {
-                                stage.OptionName = optionName;
-                                configuration.Save();
-                            }
-                        }
-
-                        ImGui.EndCombo();
-                    }
-                }
-            }
-
-            ImGui.Unindent();
-            ImGui.Separator();
-            ImGui.PopID();
+            trigger.PenumbraReactionMode = effectiveMode;
+            configuration.Save();
         }
 
-        if (removeIndex >= 0)
+        var modePreview = trigger.PenumbraReactionMode switch
         {
-            trigger.PenumbraStages.RemoveAt(removeIndex);
+            PenumbraReactionMode.Single => "Single mod",
+            PenumbraReactionMode.Staged => "Staged escalation",
+            _ => "No mod reaction",
+        };
+        if (ImGui.BeginCombo("Mode", modePreview))
+        {
+            if (ImGui.Selectable("No mod reaction", trigger.PenumbraReactionMode == PenumbraReactionMode.None))
+                SetPenumbraReactionMode(trigger, PenumbraReactionMode.None);
+
+            if (ImGui.Selectable("Single mod", trigger.PenumbraReactionMode == PenumbraReactionMode.Single))
+                SetPenumbraReactionMode(trigger, PenumbraReactionMode.Single);
+
+            if (ImGui.Selectable("Staged escalation", trigger.PenumbraReactionMode == PenumbraReactionMode.Staged))
+                SetPenumbraReactionMode(trigger, PenumbraReactionMode.Staged);
+
+            ImGui.EndCombo();
+        }
+
+        switch (trigger.PenumbraReactionMode)
+        {
+            case PenumbraReactionMode.Single:
+                DrawPenumbraSingleMode(trigger);
+                break;
+            case PenumbraReactionMode.Staged:
+                DrawPenumbraStagedMode(trigger);
+                break;
+        }
+    }
+
+    /// <summary>Applies a Penumbra reaction mode change, carrying over configuration that stays meaningful
+    /// in the new mode: Single -> Staged keeps the one entry (its threshold becomes editable); Staged ->
+    /// Single keeps only the first stage and re-locks its threshold to 1; switching to None clears the
+    /// mod reaction entirely.</summary>
+    private void SetPenumbraReactionMode(ReactionTrigger trigger, PenumbraReactionMode newMode)
+    {
+        if (trigger.PenumbraReactionMode == newMode)
+            return;
+
+        switch (newMode)
+        {
+            case PenumbraReactionMode.None:
+                trigger.PenumbraStages.Clear();
+                break;
+
+            case PenumbraReactionMode.Single:
+                if (trigger.PenumbraStages.Count > 1)
+                    trigger.PenumbraStages.RemoveRange(1, trigger.PenumbraStages.Count - 1);
+                if (trigger.PenumbraStages.Count == 0)
+                    trigger.PenumbraStages.Add(new PenumbraStageThreshold { Threshold = 1 });
+                else
+                    trigger.PenumbraStages[0].Threshold = 1;
+                break;
+
+            case PenumbraReactionMode.Staged:
+                if (trigger.PenumbraStages.Count == 0)
+                    trigger.PenumbraStages.Add(new PenumbraStageThreshold { Threshold = 1 });
+                break;
+        }
+
+        trigger.PenumbraReactionMode = newMode;
+        configuration.Save();
+    }
+
+    /// <summary>Single-mode fields: the flat mod/option-group/option pickers with no fire-count threshold
+    /// and no tab bar, backed by the sole entry in <see cref="ReactionTrigger.PenumbraStages"/> whose
+    /// threshold is always locked to 1 (applied on this trigger's very first fire).</summary>
+    private void DrawPenumbraSingleMode(ReactionTrigger trigger)
+    {
+        if (trigger.PenumbraStages.Count == 0)
+            trigger.PenumbraStages.Add(new PenumbraStageThreshold { Threshold = 1 });
+
+        var stage = trigger.PenumbraStages[0];
+        if (stage.Threshold != 1)
+        {
+            stage.Threshold = 1;
             configuration.Save();
+        }
+
+        DrawPenumbraModFields(trigger, stage, "penumbra-single");
+    }
+
+    /// <summary>Staged-mode fields: one tab per fire-count threshold, each independently naming its own
+    /// mod, option group, and option — so the same trigger can escalate within one mod's option group,
+    /// across different groups of one mod, or across entirely different mods.</summary>
+    private void DrawPenumbraStagedMode(ReactionTrigger trigger)
+    {
+        if (trigger.PenumbraStages.Count > 0 && ImGui.BeginTabBar($"##penumbraStageTabs-{trigger.Id}"))
+        {
+            var removeIndex = -1;
+            for (var s = 0; s < trigger.PenumbraStages.Count; s++)
+            {
+                var stage = trigger.PenumbraStages[s];
+                ImGui.PushID(s);
+
+                var open = true;
+                if (ImGui.BeginTabItem($"Stage ({stage.Threshold})###penumbraStageTab{s}", ref open))
+                {
+                    ImGui.SetNextItemWidth(80);
+                    var threshold = stage.Threshold;
+                    if (ImGui.InputInt("Fire count", ref threshold))
+                    {
+                        stage.Threshold = Math.Clamp(threshold, 1, ActiveEffectRegistry.MaxPenumbraFireCount);
+                        configuration.Save();
+                    }
+
+                    DrawPenumbraModFields(trigger, stage, $"penumbra-stage-{s}");
+
+                    ImGui.EndTabItem();
+                }
+
+                if (!open)
+                    removeIndex = s;
+
+                ImGui.PopID();
+            }
+
+            ImGui.EndTabBar();
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Close a stage's tab to remove it. When the resolved stage's mod differs from the previous one, the previous mod is disabled first.");
+
+            if (removeIndex >= 0)
+            {
+                trigger.PenumbraStages.RemoveAt(removeIndex);
+                configuration.Save();
+            }
         }
 
         if (ImGui.Button("Add Penumbra stage"))
@@ -650,6 +710,82 @@ public class ConfigWindow : Window, IDisposable
                 OptionName = string.Empty,
             });
             configuration.Save();
+        }
+    }
+
+    /// <summary>Shared mod/option-group/option pickers used by both Single mode's flat fields and each
+    /// Staged-mode tab's body. Not every mod has option groups at all — a mod with none is a plain
+    /// enable/disable toggle, and a mod with exactly one group skips the redundant group selector and
+    /// shows that group's options directly. Only a mod with two or more groups needs an explicit "Option
+    /// group" chooser before its "Option" dropdown.</summary>
+    private void DrawPenumbraModFields(ReactionTrigger trigger, PenumbraStageThreshold stage, string idSuffix)
+    {
+        if (DrawSearchablePicker("Mod", $"{trigger.Id}-{idSuffix}-mod", penumbraMods, stage.ModDirectory, string.Empty, out var newModDirectory))
+        {
+            stage.ModDirectory = newModDirectory;
+            stage.ModName = newModDirectory.Length > 0 && penumbraMods.TryGetValue(newModDirectory, out var newModName)
+                ? newModName
+                : string.Empty;
+            stage.OptionGroupName = string.Empty;
+            stage.OptionName = string.Empty;
+            configuration.Save();
+        }
+
+        if (stage.ModDirectory.Length == 0)
+            return;
+
+        var groupSettings = GetPenumbraModSettings(stage.ModDirectory, stage.ModName);
+
+        if (groupSettings.Count == 0)
+        {
+            ImGui.TextDisabled("This mod has no configurable options — it will simply be enabled.");
+            return;
+        }
+
+        if (groupSettings.Count == 1)
+        {
+            var onlyGroupName = groupSettings.Keys.First();
+            if (stage.OptionGroupName != onlyGroupName)
+            {
+                stage.OptionGroupName = onlyGroupName;
+                configuration.Save();
+            }
+        }
+        else
+        {
+            var groupPreview = stage.OptionGroupName.Length > 0 ? stage.OptionGroupName : "(None)";
+            if (ImGui.BeginCombo("Option group", groupPreview))
+            {
+                foreach (var groupName in groupSettings.Keys.OrderBy(g => g, StringComparer.OrdinalIgnoreCase))
+                {
+                    if (ImGui.Selectable(groupName, groupName == stage.OptionGroupName))
+                    {
+                        stage.OptionGroupName = groupName;
+                        stage.OptionName = string.Empty;
+                        configuration.Save();
+                    }
+                }
+
+                ImGui.EndCombo();
+            }
+        }
+
+        if (stage.OptionGroupName.Length > 0 && groupSettings.TryGetValue(stage.OptionGroupName, out var groupInfo))
+        {
+            var optionPreview = stage.OptionName.Length > 0 ? stage.OptionName : "(None)";
+            if (ImGui.BeginCombo("Option", optionPreview))
+            {
+                foreach (var optionName in groupInfo.Options)
+                {
+                    if (ImGui.Selectable(optionName, optionName == stage.OptionName))
+                    {
+                        stage.OptionName = optionName;
+                        configuration.Save();
+                    }
+                }
+
+                ImGui.EndCombo();
+            }
         }
     }
 

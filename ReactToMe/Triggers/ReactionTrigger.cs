@@ -28,6 +28,18 @@ public enum ChatTriggerSource
     SelfTyped,
 }
 
+/// <summary>How a trigger's Penumbra reaction is configured. <see cref="None"/> is the zero-value so
+/// pre-existing configs (saved before this enum existed) deserialize to it; a trigger with
+/// <see cref="ReactionTrigger.PenumbraStages"/> already populated and this still at <see cref="None"/> is
+/// resolved as <see cref="Staged"/> for backward compatibility rather than trusting the stored zero-value
+/// (see <see cref="ReactionTrigger.GetEffectivePenumbraMode"/>).</summary>
+public enum PenumbraReactionMode
+{
+    None,
+    Single,
+    Staged,
+}
+
 /// <summary>
 /// A fully self-contained Penumbra target — mod, option group, and option — paired with the fire-count
 /// threshold at which it becomes active. Each stage independently names its own mod, so the same trigger
@@ -142,11 +154,30 @@ public class ReactionTrigger
     /// <summary>Allow multiple active instances of this trigger at once instead of single-slot replace-on-restack.</summary>
     public bool StackMultiple { get; set; } = false;
 
+    /// <summary>Whether this trigger's Penumbra reaction is off, a single mod/option applied on first
+    /// fire, or a fire-count-staged escalation. Defaults to <see cref="Triggers.PenumbraReactionMode.None"/>,
+    /// the enum's zero-value, so old configs deserialize into it; use
+    /// <see cref="GetEffectivePenumbraMode"/> rather than reading this directly, since it corrects the
+    /// ambiguous old-config case.</summary>
+    public PenumbraReactionMode PenumbraReactionMode { get; set; } = PenumbraReactionMode.None;
+
     /// <summary>Fire-count thresholds, each naming its own Penumbra mod/group/option. The active stage at
     /// any fire count is the entry with the greatest <see cref="PenumbraStageThreshold.Threshold"/> not
     /// exceeding it; if none qualify yet, no stage is applied. Order in this list doesn't matter —
-    /// resolution always scans for the greatest qualifying threshold. Empty = no staged mod configured.</summary>
+    /// resolution always scans for the greatest qualifying threshold. Empty = no staged mod configured.
+    /// In <see cref="Triggers.PenumbraReactionMode.Single"/> mode this holds exactly one entry whose
+    /// <see cref="PenumbraStageThreshold.Threshold"/> is always <c>1</c>.</summary>
     public List<PenumbraStageThreshold> PenumbraStages { get; set; } = [];
+
+    /// <summary>Resolves <see cref="PenumbraReactionMode"/> for use, correcting the one ambiguous case: a
+    /// config saved before this mode existed has <see cref="PenumbraReactionMode"/> at its zero-value
+    /// (<see cref="Triggers.PenumbraReactionMode.None"/>) but may already have stages configured. Such a
+    /// trigger is resolved as <see cref="Triggers.PenumbraReactionMode.Staged"/> so its pre-existing
+    /// behavior and presentation are unchanged; any other stored value is trusted as-is.</summary>
+    public PenumbraReactionMode GetEffectivePenumbraMode() =>
+        PenumbraReactionMode == PenumbraReactionMode.None && PenumbraStages.Count > 0
+            ? PenumbraReactionMode.Staged
+            : PenumbraReactionMode;
 
     /// <summary>Emote for the local player to perform when this trigger fires, independent of its other
     /// reactions. Fire-and-forget: performed once per fire, not tracked for reverting. 0 = disabled.</summary>
