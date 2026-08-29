@@ -1,6 +1,36 @@
 using System;
+using System.Collections.Generic;
 
 namespace ReactToMe.Triggers;
+
+/// <summary>What Glamourer state a trigger's timer expiry reverts to.</summary>
+public enum GlamourerRevertMode
+{
+    Automation,
+    SpecificDesign,
+}
+
+/// <summary>
+/// A fully self-contained Penumbra target — mod, option group, and option — paired with the fire-count
+/// threshold at which it becomes active. Each stage independently names its own mod, so the same trigger
+/// can escalate within one mod's option group, across different option groups of one mod, or across
+/// entirely different mods, all with the same mechanism.
+/// </summary>
+[Serializable]
+public class PenumbraStageThreshold
+{
+    public int Threshold { get; set; } = 1;
+
+    /// <summary>Directory (folder) name of the Penumbra mod this stage targets.</summary>
+    public string ModDirectory { get; set; } = string.Empty;
+
+    /// <summary>Display name of the mod, paired with <see cref="ModDirectory"/> as Penumbra's IPC
+    /// identifies a mod by both.</summary>
+    public string ModName { get; set; } = string.Empty;
+
+    public string OptionGroupName { get; set; } = string.Empty;
+    public string OptionName { get; set; } = string.Empty;
+}
 
 [Serializable]
 public class ReactionTrigger
@@ -48,11 +78,27 @@ public class ReactionTrigger
     /// </summary>
     public bool NoExpiration { get; set; } = false;
 
+    /// <summary>What Glamourer state this trigger's timer expiry reverts to. Defaults to automation,
+    /// matching behavior from before this option existed.</summary>
+    public GlamourerRevertMode GlamourerRevertMode { get; set; } = GlamourerRevertMode.Automation;
+
+    /// <summary>Design to apply on expiry when <see cref="GlamourerRevertMode"/> is
+    /// <see cref="Triggers.GlamourerRevertMode.SpecificDesign"/>. Falls back to reverting to
+    /// automation if left unset (<see cref="Guid.Empty"/>).</summary>
+    public Guid RevertToDesignId { get; set; } = Guid.Empty;
+
     /// <summary>If the same trigger fires again while active, restart the timer instead of ignoring it.</summary>
     public bool RefreshOnRepeat { get; set; } = true;
 
     /// <summary>Allow multiple active instances of this trigger at once instead of single-slot replace-on-restack.</summary>
     public bool StackMultiple { get; set; } = false;
 
-    public bool HasAnyAction => GlamourerDesignId != Guid.Empty || MoodleGuid != Guid.Empty || !string.IsNullOrWhiteSpace(ChatMessage);
+    /// <summary>Fire-count thresholds, each naming its own Penumbra mod/group/option. The active stage at
+    /// any fire count is the entry with the greatest <see cref="PenumbraStageThreshold.Threshold"/> not
+    /// exceeding it; if none qualify yet, no stage is applied. Order in this list doesn't matter —
+    /// resolution always scans for the greatest qualifying threshold. Empty = no staged mod configured.</summary>
+    public List<PenumbraStageThreshold> PenumbraStages { get; set; } = [];
+
+    public bool HasAnyAction => GlamourerDesignId != Guid.Empty || MoodleGuid != Guid.Empty
+        || !string.IsNullOrWhiteSpace(ChatMessage) || PenumbraStages.Count > 0;
 }

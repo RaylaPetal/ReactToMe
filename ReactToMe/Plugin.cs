@@ -37,6 +37,7 @@ public sealed class Plugin : IDalamudPlugin
 
     public GlamourerIpc GlamourerIpc { get; init; }
     public MoodlesIpc MoodlesIpc { get; init; }
+    public PenumbraIpc PenumbraIpc { get; init; }
     public EmoteCatalog EmoteCatalog { get; init; }
     public ChatMessageSender ChatMessageSender { get; init; }
 
@@ -50,7 +51,8 @@ public sealed class Plugin : IDalamudPlugin
 
         GlamourerIpc = new GlamourerIpc(PluginInterface, Log, ChatGui);
         MoodlesIpc = new MoodlesIpc(Log, ChatGui);
-        EffectRegistry = new ActiveEffectRegistry(GlamourerIpc);
+        PenumbraIpc = new PenumbraIpc(PluginInterface, Log, ChatGui);
+        EffectRegistry = new ActiveEffectRegistry(GlamourerIpc, PenumbraIpc);
         EmoteCatalog = new EmoteCatalog(DataManager);
         ChatMessageSender = new ChatMessageSender(Log, ChatGui);
 
@@ -110,7 +112,7 @@ public sealed class Plugin : IDalamudPlugin
         if (trigger == null)
             return;
 
-        if (trigger.GlamourerDesignId != Guid.Empty)
+        if (trigger.GlamourerDesignId != Guid.Empty || trigger.PenumbraStages.Count > 0)
             EffectRegistry.Apply(trigger);
 
         if (trigger.MoodleGuid != Guid.Empty)

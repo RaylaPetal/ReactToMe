@@ -5,6 +5,8 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Windowing;
+using Penumbra.Api.Enums;
+using ReactToMe.Effects;
 using ReactToMe.Ipc;
 using ReactToMe.Triggers;
 
@@ -19,6 +21,8 @@ public class ConfigWindow : Window, IDisposable
     private IReadOnlyDictionary<uint, string> emotes = new Dictionary<uint, string>();
     private IReadOnlyDictionary<Guid, string> designs = new Dictionary<Guid, string>();
     private IReadOnlyDictionary<Guid, MoodleInfo> moodles = new Dictionary<Guid, MoodleInfo>();
+    private IReadOnlyDictionary<string, string> penumbraMods = new Dictionary<string, string>();
+    private readonly Dictionary<string, IReadOnlyDictionary<string, (string[] Options, GroupType Type)>> penumbraModSettingsCache = new();
     private bool listsLoaded;
 
     public ConfigWindow(Plugin plugin) : base("ReactToMe Configuration###ReactToMe config window")
@@ -56,7 +60,20 @@ public class ConfigWindow : Window, IDisposable
         emotes = plugin.EmoteCatalog.GetEmotes();
         designs = plugin.GlamourerIpc.GetDesigns();
         moodles = plugin.MoodlesIpc.GetMoodles();
+        penumbraMods = plugin.PenumbraIpc.GetMods();
+        penumbraModSettingsCache.Clear();
         listsLoaded = true;
+    }
+
+    private IReadOnlyDictionary<string, (string[] Options, GroupType Type)> GetPenumbraModSettings(string modDirectory, string modName)
+    {
+        if (!penumbraModSettingsCache.TryGetValue(modDirectory, out var settings))
+        {
+            settings = plugin.PenumbraIpc.GetModSettings(modDirectory, modName);
+            penumbraModSettingsCache[modDirectory] = settings;
+        }
+
+        return settings;
     }
 
     public override void Draw()
@@ -186,8 +203,10 @@ public class ConfigWindow : Window, IDisposable
                         ImGui.SetTooltip("Minimum time between chat sends for this trigger, so a repeated emote can't spam the channel.");
                 }
 
+                DrawPenumbraStages(trigger);
+
                 if (!trigger.HasAnyAction)
-                    ImGui.TextColored(new Vector4(1f, 0.85f, 0.3f, 1f), "Select a Glamourer design, a Moodle, and/or a chat message — this trigger won't do anything otherwise.");
+                    ImGui.TextColored(new Vector4(1f, 0.85f, 0.3f, 1f), "Select a Glamourer design, a Moodle, a chat message, and/or a Penumbra mod — this trigger won't do anything otherwise.");
 
                 ImGui.Spacing();
 
@@ -203,6 +222,37 @@ public class ConfigWindow : Window, IDisposable
                     }
                     if (ImGui.IsItemHovered())
                         ImGui.SetTooltip("How long the applied Glamourer design lasts before automatically reverting. Moodles expire on their own preset duration instead.");
+
+                    var revertModePreview = trigger.GlamourerRevertMode == GlamourerRevertMode.SpecificDesign
+                        ? "Apply a specific design"
+                        : "Revert to automation";
+                    if (ImGui.BeginCombo("On expiry", revertModePreview))
+                    {
+                        if (ImGui.Selectable("Revert to automation", trigger.GlamourerRevertMode == GlamourerRevertMode.Automation))
+                        {
+                            trigger.GlamourerRevertMode = GlamourerRevertMode.Automation;
+                            configuration.Save();
+                        }
+
+                        if (ImGui.Selectable("Apply a specific design", trigger.GlamourerRevertMode == GlamourerRevertMode.SpecificDesign))
+                        {
+                            trigger.GlamourerRevertMode = GlamourerRevertMode.SpecificDesign;
+                            configuration.Save();
+                        }
+
+                        ImGui.EndCombo();
+                    }
+                    if (ImGui.IsItemHovered())
+                        ImGui.SetTooltip("What Glamourer state this trigger reverts to when its timer expires. \"Force revert all\" always reverts to automation regardless of this setting.");
+
+                    if (trigger.GlamourerRevertMode == GlamourerRevertMode.SpecificDesign)
+                    {
+                        if (DrawSearchablePicker("Revert-to design", $"{trigger.Id}-revert-design", designs, trigger.RevertToDesignId, Guid.Empty, out var newRevertDesignId))
+                        {
+                            trigger.RevertToDesignId = newRevertDesignId;
+                            configuration.Save();
+                        }
+                    }
                 }
 
                 ImGui.BeginDisabled(!hasMoodle);
@@ -249,6 +299,110 @@ public class ConfigWindow : Window, IDisposable
         if (ImGui.Button("Add Trigger"))
         {
             configuration.Triggers.Add(new ReactionTrigger());
+            configuration.Save();
+        }
+    }
+
+    /// <summary>Draws the staged-Penumbra-mod section for a trigger: a list of fire-count thresholds, each
+    /// independently naming its own mod, option group, and option — so the same trigger can escalate within
+    /// one mod's option group, across different groups of one mod, or across entirely different mods.</summary>
+    private void DrawPenumbraStages(ReactionTrigger trigger)
+    {
+        ImGui.TextDisabled("Penumbra stages (fire count -> mod/option; highest threshold reached wins)");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Firing this trigger while already active increases its fire count (capped at 20, FFXIV's own debuff stack limit). Each stage can target its own mod, option group, and option. When the resolved stage's mod differs from the previous one, the previous mod is disabled first. The trigger's timer (or manual force-revert) disables whichever mod is currently active.");
+
+        var removeIndex = -1;
+        for (var s = 0; s < trigger.PenumbraStages.Count; s++)
+        {
+            var stage = trigger.PenumbraStages[s];
+            ImGui.PushID(s);
+            ImGui.Indent();
+
+            ImGui.SetNextItemWidth(80);
+            var threshold = stage.Threshold;
+            if (ImGui.InputInt("Fire count", ref threshold))
+            {
+                stage.Threshold = Math.Clamp(threshold, 1, ActiveEffectRegistry.MaxPenumbraFireCount);
+                configuration.Save();
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("Remove##removeStage"))
+                removeIndex = s;
+
+            if (DrawSearchablePicker("Mod", $"{trigger.Id}-penumbra-stage-{s}-mod", penumbraMods, stage.ModDirectory, string.Empty, out var newModDirectory))
+            {
+                stage.ModDirectory = newModDirectory;
+                stage.ModName = newModDirectory.Length > 0 && penumbraMods.TryGetValue(newModDirectory, out var newModName)
+                    ? newModName
+                    : string.Empty;
+                stage.OptionGroupName = string.Empty;
+                stage.OptionName = string.Empty;
+                configuration.Save();
+            }
+
+            if (stage.ModDirectory.Length > 0)
+            {
+                var groupSettings = GetPenumbraModSettings(stage.ModDirectory, stage.ModName);
+
+                var groupPreview = stage.OptionGroupName.Length > 0 ? stage.OptionGroupName : "(None)";
+                if (ImGui.BeginCombo("Option group", groupPreview))
+                {
+                    foreach (var groupName in groupSettings.Keys.OrderBy(g => g, StringComparer.OrdinalIgnoreCase))
+                    {
+                        if (ImGui.Selectable(groupName, groupName == stage.OptionGroupName))
+                        {
+                            stage.OptionGroupName = groupName;
+                            stage.OptionName = string.Empty;
+                            configuration.Save();
+                        }
+                    }
+
+                    ImGui.EndCombo();
+                }
+
+                if (stage.OptionGroupName.Length > 0 && groupSettings.TryGetValue(stage.OptionGroupName, out var groupInfo))
+                {
+                    var optionPreview = stage.OptionName.Length > 0 ? stage.OptionName : "(None)";
+                    if (ImGui.BeginCombo("Option", optionPreview))
+                    {
+                        foreach (var optionName in groupInfo.Options)
+                        {
+                            if (ImGui.Selectable(optionName, optionName == stage.OptionName))
+                            {
+                                stage.OptionName = optionName;
+                                configuration.Save();
+                            }
+                        }
+
+                        ImGui.EndCombo();
+                    }
+                }
+            }
+
+            ImGui.Unindent();
+            ImGui.Separator();
+            ImGui.PopID();
+        }
+
+        if (removeIndex >= 0)
+        {
+            trigger.PenumbraStages.RemoveAt(removeIndex);
+            configuration.Save();
+        }
+
+        if (ImGui.Button("Add Penumbra stage"))
+        {
+            var last = trigger.PenumbraStages.Count > 0 ? trigger.PenumbraStages[^1] : null;
+            trigger.PenumbraStages.Add(new PenumbraStageThreshold
+            {
+                Threshold = last == null ? 1 : Math.Min(last.Threshold + 1, ActiveEffectRegistry.MaxPenumbraFireCount),
+                ModDirectory = last?.ModDirectory ?? string.Empty,
+                ModName = last?.ModName ?? string.Empty,
+                OptionGroupName = last?.OptionGroupName ?? string.Empty,
+                OptionName = string.Empty,
+            });
             configuration.Save();
         }
     }
