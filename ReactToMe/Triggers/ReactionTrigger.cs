@@ -10,6 +10,24 @@ public enum GlamourerRevertMode
     SpecificDesign,
 }
 
+/// <summary>What fires a trigger. Only the fields belonging to the selected type are used for
+/// matching — fields belonging to the others are ignored regardless of their stored value.</summary>
+public enum TriggerSourceType
+{
+    Emote,
+    ChatPhrase,
+    JobSkill,
+}
+
+/// <summary>Who must have said a chat-phrase trigger's <see cref="ReactionTrigger.ChatPhrase"/> for it
+/// to fire. Chat messages have no in-game "target" the way an emote or a cast does, so this is its own
+/// enum rather than a reuse of <see cref="TriggerScope"/>.</summary>
+public enum ChatTriggerSource
+{
+    AnyoneNearby,
+    SelfTyped,
+}
+
 /// <summary>
 /// A fully self-contained Penumbra target — mod, option group, and option — paired with the fire-count
 /// threshold at which it becomes active. Each stage independently names its own mod, so the same trigger
@@ -39,14 +57,45 @@ public class ReactionTrigger
 
     public bool IsEnabled { get; set; } = true;
 
+    /// <summary>Optional display name shown in the trigger list. Falls back to a label generated from
+    /// <see cref="TriggerSourceType"/> and its configuration when empty.</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>What fires this trigger. Only that type's fields below are used for matching.</summary>
+    public TriggerSourceType TriggerSourceType { get; set; } = TriggerSourceType.Emote;
+
+    // --- Source (only the fields for the selected TriggerSourceType are used) ---
+
     /// <summary>
     /// Lumina Emote sheet RowId, which is also the game's native EmoteController.EmoteId.
     /// 0 = unset. Picked from a dropdown in the UI rather than typed, so there's no text-matching
-    /// against localized/chat-log text at all.
+    /// against localized/chat-log text at all. Used when <see cref="TriggerSourceType"/> is
+    /// <see cref="Triggers.TriggerSourceType.Emote"/>.
     /// </summary>
     public uint EmoteId { get; set; } = 0;
 
+    /// <summary>Who must have performed/been targeted by the emote or job-skill cast for this trigger to
+    /// fire. Used for <see cref="Triggers.TriggerSourceType.Emote"/> and
+    /// <see cref="Triggers.TriggerSourceType.JobSkill"/>, both of which have a real in-game target.</summary>
     public TriggerScope Scope { get; set; } = TriggerScope.OthersTargetingMe;
+
+    /// <summary>Free-form substring matched case-insensitively against incoming chat messages. No fixed
+    /// required prefix or suffix. Used when <see cref="TriggerSourceType"/> is
+    /// <see cref="Triggers.TriggerSourceType.ChatPhrase"/>.</summary>
+    public string ChatPhrase { get; set; } = string.Empty;
+
+    /// <summary>Who must have said <see cref="ChatPhrase"/> for this trigger to fire.</summary>
+    public ChatTriggerSource ChatTriggerSource { get; set; } = ChatTriggerSource.AnyoneNearby;
+
+    /// <summary>Lumina ClassJob sheet RowId of the job the skill picker below is narrowed to. UI
+    /// convenience only — matching is done purely on <see cref="JobSkillActionId"/>, not this.</summary>
+    public uint JobSkillClassJobId { get; set; } = 0;
+
+    /// <summary>Lumina Action sheet RowId of the job skill to watch for. Used when
+    /// <see cref="TriggerSourceType"/> is <see cref="Triggers.TriggerSourceType.JobSkill"/>, matched
+    /// against <see cref="Scope"/> for who must be casting it. Only actions with a nonzero cast time are
+    /// detectable — instant weaponskills/abilities never populate a detectable cast state.</summary>
+    public uint JobSkillActionId { get; set; } = 0;
 
     // --- Actions (independently optional; at least one required for the trigger to do anything) ---
 
@@ -99,6 +148,10 @@ public class ReactionTrigger
     /// resolution always scans for the greatest qualifying threshold. Empty = no staged mod configured.</summary>
     public List<PenumbraStageThreshold> PenumbraStages { get; set; } = [];
 
+    /// <summary>Emote for the local player to perform when this trigger fires, independent of its other
+    /// reactions. Fire-and-forget: performed once per fire, not tracked for reverting. 0 = disabled.</summary>
+    public uint GestureEmoteId { get; set; } = 0;
+
     public bool HasAnyAction => GlamourerDesignId != Guid.Empty || MoodleGuid != Guid.Empty
-        || !string.IsNullOrWhiteSpace(ChatMessage) || PenumbraStages.Count > 0;
+        || !string.IsNullOrWhiteSpace(ChatMessage) || PenumbraStages.Count > 0 || GestureEmoteId != 0;
 }

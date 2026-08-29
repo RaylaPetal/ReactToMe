@@ -6,9 +6,11 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using ECommons;
 using ReactToMe.Actions;
+using ReactToMe.ChatDetection;
 using ReactToMe.Effects;
 using ReactToMe.Emotes;
 using ReactToMe.Ipc;
+using ReactToMe.JobSkills;
 using ReactToMe.Triggers;
 using ReactToMe.Windows;
 
@@ -33,15 +35,17 @@ public sealed class Plugin : IDalamudPlugin
 
     public readonly WindowSystem WindowSystem = new("ReactToMe");
     private ConfigWindow ConfigWindow { get; init; }
-    private MainWindow MainWindow { get; init; }
 
     public GlamourerIpc GlamourerIpc { get; init; }
     public MoodlesIpc MoodlesIpc { get; init; }
     public PenumbraIpc PenumbraIpc { get; init; }
     public EmoteCatalog EmoteCatalog { get; init; }
+    public JobSkillCatalog JobSkillCatalog { get; init; }
     public ChatMessageSender ChatMessageSender { get; init; }
 
     private readonly EmotePoller emotePoller;
+    private readonly JobSkillPoller jobSkillPoller;
+    private readonly ChatMessageListener chatMessageListener;
 
     public Plugin()
     {
@@ -54,16 +58,21 @@ public sealed class Plugin : IDalamudPlugin
         PenumbraIpc = new PenumbraIpc(PluginInterface, Log, ChatGui);
         EffectRegistry = new ActiveEffectRegistry(GlamourerIpc, PenumbraIpc);
         EmoteCatalog = new EmoteCatalog(DataManager);
+        JobSkillCatalog = new JobSkillCatalog(DataManager);
         ChatMessageSender = new ChatMessageSender(Log, ChatGui);
 
         emotePoller = new EmotePoller(ObjectTable, Log);
         emotePoller.EmotePerformed += OnEmotePerformed;
 
+        jobSkillPoller = new JobSkillPoller(ObjectTable, Log);
+        jobSkillPoller.JobSkillCast += OnJobSkillCast;
+
+        chatMessageListener = new ChatMessageListener(ChatGui, ObjectTable);
+        chatMessageListener.MessageReceived += OnChatMessageReceived;
+
         ConfigWindow = new ConfigWindow(this);
-        MainWindow = new MainWindow(this);
 
         WindowSystem.AddWindow(ConfigWindow);
-        WindowSystem.AddWindow(MainWindow);
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
@@ -86,6 +95,9 @@ public sealed class Plugin : IDalamudPlugin
         ClientState.Logout -= OnLogout;
 
         emotePoller.EmotePerformed -= OnEmotePerformed;
+        jobSkillPoller.JobSkillCast -= OnJobSkillCast;
+        chatMessageListener.MessageReceived -= OnChatMessageReceived;
+        chatMessageListener.Dispose();
         MoodlesIpc.Dispose();
 
         PluginInterface.UiBuilder.Draw -= DrawWindows;
@@ -95,7 +107,6 @@ public sealed class Plugin : IDalamudPlugin
         WindowSystem.RemoveAllWindows();
 
         ConfigWindow.Dispose();
-        MainWindow.Dispose();
 
         CommandManager.RemoveHandler(CommandName);
 
@@ -108,18 +119,41 @@ public sealed class Plugin : IDalamudPlugin
         var sourceIsLocalPlayer = e.SourceGameObjectId == localPlayerId;
         var targetIsLocalPlayer = localPlayerId != null && e.TargetGameObjectId == localPlayerId;
 
-        var trigger = TriggerMatcher.FindMatch(Configuration.Triggers, e.EmoteId, sourceIsLocalPlayer, targetIsLocalPlayer);
-        if (trigger == null)
-            return;
+        var trigger = TriggerMatcher.FindEmoteMatch(Configuration.Triggers, e.EmoteId, sourceIsLocalPlayer, targetIsLocalPlayer);
+        if (trigger != null)
+            FireReactions(trigger);
+    }
 
+    private void OnJobSkillCast(object? sender, JobSkillCastEventArgs e)
+    {
+        var localPlayerId = ObjectTable.LocalPlayer?.GameObjectId;
+        var sourceIsLocalPlayer = e.SourceGameObjectId == localPlayerId;
+        var targetIsLocalPlayer = localPlayerId != null && e.TargetGameObjectId == localPlayerId;
+
+        var trigger = TriggerMatcher.FindJobSkillMatch(Configuration.Triggers, e.ActionId, sourceIsLocalPlayer, targetIsLocalPlayer);
+        if (trigger != null)
+            FireReactions(trigger);
+    }
+
+    private void OnChatMessageReceived(object? sender, ChatMessageReceivedEventArgs e)
+    {
+        var trigger = TriggerMatcher.FindChatPhraseMatch(Configuration.Triggers, e.Message, e.SenderIsLocalPlayer);
+        if (trigger != null)
+            FireReactions(trigger);
+    }
+
+    private void FireReactions(ReactionTrigger trigger)
+    {
         if (trigger.GlamourerDesignId != Guid.Empty || trigger.PenumbraStages.Count > 0)
             EffectRegistry.Apply(trigger);
 
         if (trigger.MoodleGuid != Guid.Empty)
             MoodlesIpc.ApplyToLocalPlayer(trigger.MoodleGuid);
 
-        if (!string.IsNullOrWhiteSpace(trigger.ChatMessage))
-            ChatMessageSender.Send(trigger.Id, trigger.ChatMessage, trigger.ChatCooldownSeconds);
+        // Chat message and gesture share one cooldown window (both go through the same chatbox
+        // submission), so they're sent together under a single cooldown check.
+        var gestureCommand = trigger.GestureEmoteId != 0 ? EmoteCatalog.GetCommand(trigger.GestureEmoteId) : null;
+        ChatMessageSender.Send(trigger.Id, trigger.ChatCooldownSeconds, trigger.ChatMessage, gestureCommand);
     }
 
     private void DrawWindows()
@@ -131,6 +165,7 @@ public sealed class Plugin : IDalamudPlugin
     private void OnFrameworkUpdate(IFramework framework)
     {
         emotePoller.Poll();
+        jobSkillPoller.Poll();
         EffectRegistry.Tick();
     }
 
@@ -149,9 +184,9 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
-        MainWindow.Toggle();
+        ConfigWindow.Toggle();
     }
 
     public void ToggleConfigUi() => ConfigWindow.Toggle();
-    public void ToggleMainUi() => MainWindow.Toggle();
+    public void ToggleMainUi() => ConfigWindow.Toggle();
 }
