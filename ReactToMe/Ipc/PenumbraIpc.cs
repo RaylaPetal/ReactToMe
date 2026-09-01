@@ -29,6 +29,8 @@ public sealed class PenumbraIpc
     private readonly GetModDirectory getModDirectory;
     private readonly AddMod addMod;
     private readonly ReloadMod reloadMod;
+    private readonly DeleteMod deleteMod;
+    private readonly SetModPath setModPath;
     private readonly GetPlayerResourcesOfType getPlayerResourcesOfType;
     private readonly ConvertTextureFile convertTextureFile;
     private readonly ConvertTextureData convertTextureData;
@@ -47,6 +49,8 @@ public sealed class PenumbraIpc
         getModDirectory = new GetModDirectory(pluginInterface);
         addMod = new AddMod(pluginInterface);
         reloadMod = new ReloadMod(pluginInterface);
+        deleteMod = new DeleteMod(pluginInterface);
+        setModPath = new SetModPath(pluginInterface);
         getPlayerResourcesOfType = new GetPlayerResourcesOfType(pluginInterface);
         convertTextureFile = new ConvertTextureFile(pluginInterface);
         convertTextureData = new ConvertTextureData(pluginInterface);
@@ -221,6 +225,55 @@ public sealed class PenumbraIpc
         {
             log.Warning(ex, "Penumbra IPC unavailable while reloading generated mod {ModDirectoryName}", modDirectoryName);
             chatGui.PrintError("[ReactToMe] Could not reload the generated mod — is Penumbra installed and loaded?");
+            return false;
+        }
+    }
+
+    /// <summary>Permanently deletes a mod from Penumbra — its own files/folder included. Used when a
+    /// project is removed from ReactToMe so its generated mod doesn't linger in Penumbra's mod list
+    /// forever.</summary>
+    public bool DeleteGeneratedMod(string modDirectoryName, string modName)
+    {
+        try
+        {
+            var result = deleteMod.Invoke(modDirectoryName, modName);
+            if (!IsAcceptable(result))
+            {
+                log.Warning("Penumbra rejected deleting generated mod {ModDirectoryName}: {Result}", modDirectoryName, result);
+                chatGui.PrintError($"[ReactToMe] Penumbra did not delete the generated mod \"{modName}\" ({result}).");
+                return false;
+            }
+
+            return true;
+        }
+        catch (IpcError ex)
+        {
+            log.Warning(ex, "Penumbra IPC unavailable while deleting generated mod {ModDirectoryName}", modDirectoryName);
+            chatGui.PrintError("[ReactToMe] Could not delete the generated mod — is Penumbra installed and loaded?");
+            return false;
+        }
+    }
+
+    /// <summary>Sets a mod's sort-order path in Penumbra's own mod list (e.g. "Body/My Overlay Project"),
+    /// filing it under a folder the same way typing a path in Penumbra's UI would.</summary>
+    public bool SetModPath(string modDirectoryName, string newPath, string modName)
+    {
+        try
+        {
+            var result = setModPath.Invoke(modDirectoryName, newPath, modName);
+            if (!IsAcceptable(result))
+            {
+                log.Warning("Penumbra rejected setting the mod path for {ModDirectoryName}: {Result}", modDirectoryName, result);
+                chatGui.PrintError($"[ReactToMe] Penumbra did not accept the folder change for \"{modName}\" ({result}).");
+                return false;
+            }
+
+            return true;
+        }
+        catch (IpcError ex)
+        {
+            log.Warning(ex, "Penumbra IPC unavailable while setting mod path for {ModDirectoryName}", modDirectoryName);
+            chatGui.PrintError("[ReactToMe] Could not set the generated mod's folder — is Penumbra installed and loaded?");
             return false;
         }
     }

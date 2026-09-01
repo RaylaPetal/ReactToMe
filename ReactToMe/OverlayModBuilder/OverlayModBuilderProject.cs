@@ -11,6 +11,12 @@ namespace ReactToMe.OverlayModBuilder;
 [Serializable]
 public class OverlayModBuilderStage
 {
+    /// <summary>Permanent per-stage identity, assigned once and never reused — this stage's own baked
+    /// texture/preview files are named from this, not from its current position in the project's stage
+    /// list, so removing or reordering stages can never make one stage's files collide with, or be mistaken
+    /// for, another's. See <see cref="OverlayModWriter.GetStageRelativeFilePath"/>.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
+
     /// <summary>Shown as this stage's Penumbra option name once the project is applied.</summary>
     public string Name { get; set; } = "Stage";
 
@@ -123,6 +129,12 @@ public class OverlayModBuilderProject
     /// newly-registered mod, so a project that never touches this behaves exactly as before this field
     /// existed.</summary>
     public int Priority { get; set; }
+
+    /// <summary>Optional folder path this project's mod is filed under in Penumbra's own mod list (e.g.
+    /// "Body"), applied via <see cref="Ipc.PenumbraIpc.SetModPath"/> whenever the project is applied or its
+    /// mod is recreated. Empty = leave the mod wherever Penumbra already has it, same as before this field
+    /// existed.</summary>
+    public string PenumbraFolder { get; set; } = string.Empty;
 
     public List<OverlayModBuilderStage> Stages { get; set; } = [];
 }

@@ -41,23 +41,29 @@ public sealed class OverlayModWriter
     /// change — which a stage's own overlay image and the project's snapshot version can never reflect —
     /// always forces every stage past its own staleness tracking and gets re-baked at its new location,
     /// rather than silently leaving already-"successfully baked" stages pointing nowhere (this has already
-    /// happened twice: once when stage files moved from the mod root into a mirrored directory, and once
-    /// when that mirroring itself was replaced by this fixed scheme).</summary>
-    public const int StageFileSchemeVersion = 2;
+    /// happened three times: once when stage files moved from the mod root into a mirrored directory, once
+    /// when that mirroring itself was replaced by a fixed scheme keyed on stage index, and once when that
+    /// index-based naming was replaced by this stage-Id-based one).</summary>
+    public const int StageFileSchemeVersion = 3;
 
-    /// <summary>Stable per-stage relative file path within a project's mod folder. Deliberately independent
-    /// of the target game path's own content: a target picked from <c>GetTextureOverlayCandidates</c> can
-    /// be a real virtual game path (e.g. "chara/human/.../c1801b0001_d.tex") or a raw absolute override path
-    /// from another mod that redirects via "whatever's currently resolving" (e.g. a Windows path like
-    /// "Z:\...\Skin Overlay Kaede\chara\kaede overlay.tex") — parsing the target's own structure previously
-    /// broke on the latter, since it uses backslashes and no forward slash was ever found, and the resulting
-    /// "relative" path was actually still absolute, which made <see cref="ToDiskPath"/>'s Path.Combine
-    /// discard the mod folder entirely and silently write into the OTHER mod's own directory instead. A real
-    /// working mod's own layout was checked directly early on: only the top-level folder needs to be named
-    /// "chara" (not nested under any other folder) — the exact file name never mattered. This always emits
-    /// that fixed, safe shape, uses forward slashes (game-path convention); callers writing to disk should
-    /// normalize via <see cref="ToDiskPath"/>.</summary>
-    public static string GetStageRelativeFilePath(int stageIndex) => $"chara/reacttome_overlay_stage{stageIndex}.tex";
+    /// <summary>Stable per-stage relative file path within a project's mod folder, keyed on the stage's own
+    /// permanent <see cref="OverlayModBuilderStage.Id"/> rather than its position in the project's stage
+    /// list — a stage's file identity must never depend on list position, since removing an earlier stage
+    /// would otherwise silently shift every later stage onto a different file (see
+    /// <see cref="OverlayModBuilderStage.Id"/>'s own doc comment for why this matters). Deliberately
+    /// independent of the target game path's own content too: a target picked from
+    /// <c>GetTextureOverlayCandidates</c> can be a real virtual game path (e.g.
+    /// "chara/human/.../c1801b0001_d.tex") or a raw absolute override path from another mod that redirects
+    /// via "whatever's currently resolving" (e.g. a Windows path like "Z:\...\Skin Overlay Kaede\chara\kaede
+    /// overlay.tex") — parsing the target's own structure previously broke on the latter, since it uses
+    /// backslashes and no forward slash was ever found, and the resulting "relative" path was actually still
+    /// absolute, which made <see cref="ToDiskPath"/>'s Path.Combine discard the mod folder entirely and
+    /// silently write into the OTHER mod's own directory instead. A real working mod's own layout was
+    /// checked directly early on: only the top-level folder needs to be named "chara" (not nested under any
+    /// other folder) — the exact file name never mattered. This always emits that fixed, safe shape, uses
+    /// forward slashes (game-path convention); callers writing to disk should normalize via
+    /// <see cref="ToDiskPath"/>.</summary>
+    public static string GetStageRelativeFilePath(Guid stageId) => $"chara/reacttome_overlay_stage_{stageId:N}.tex";
 
     /// <summary>Converts a forward-slash relative path (game-path convention, also used for the mod's
     /// internal <c>Files</c> mapping) into a real path under a folder, using the local platform's directory
@@ -78,7 +84,7 @@ public sealed class OverlayModWriter
     /// unbaked or failed stage is simply left out, never applied as a broken option) — and registers or
     /// reloads it with Penumbra depending on whether this project has been applied before. Returns whether
     /// the whole operation succeeded.</summary>
-    public bool ApplyProject(Guid projectId, string displayName, IReadOnlyList<string> stageNames, bool alreadyRegistered)
+    public bool ApplyProject(Guid projectId, string displayName, IReadOnlyList<OverlayModBuilderStage> stages, bool alreadyRegistered)
     {
         var modFolder = GetModFolderPath(projectId);
         if (modFolder == null)
@@ -90,19 +96,19 @@ public sealed class OverlayModWriter
         Directory.CreateDirectory(modFolder);
 
         var options = new List<OverlayOption>();
-        for (var i = 0; i < stageNames.Count; i++)
+        foreach (var stage in stages)
         {
-            var relativeFilePath = GetStageRelativeFilePath(i);
+            var relativeFilePath = GetStageRelativeFilePath(stage.Id);
             var stageFilePath = ToDiskPath(modFolder, relativeFilePath);
             if (!File.Exists(stageFilePath))
             {
-                log.Information("Overlay mod builder: stage \"{StageName}\" has no baked file at {StageFilePath} — leaving it out of this apply", stageNames[i], stageFilePath);
+                log.Information("Overlay mod builder: stage \"{StageName}\" has no baked file at {StageFilePath} — leaving it out of this apply", stage.Name, stageFilePath);
                 continue;
             }
 
             options.Add(new OverlayOption
             {
-                Name = stageNames[i],
+                Name = stage.Name,
                 Files = { [RedirectGamePath] = relativeFilePath },
             });
         }
