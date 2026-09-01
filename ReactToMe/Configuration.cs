@@ -1,6 +1,7 @@
 using Dalamud.Configuration;
 using System;
 using System.Collections.Generic;
+using ReactToMe.OverlayModBuilder;
 using ReactToMe.Triggers;
 
 namespace ReactToMe;
@@ -13,6 +14,8 @@ public class Configuration : IPluginConfiguration
     public bool IsConfigWindowMovable { get; set; } = true;
 
     public List<ReactionTrigger> Triggers { get; set; } = [];
+
+    public List<OverlayModBuilderProject> OverlayModBuilderProjects { get; set; } = [];
 
     /// <summary>
     /// If true, an active Glamourer effect is reverted immediately on logout instead of

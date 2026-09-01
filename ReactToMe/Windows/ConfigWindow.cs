@@ -1,14 +1,19 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Numerics;
+using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
+using Dalamud.Interface.Textures.TextureWraps;
 using Dalamud.Interface.Windowing;
+using ECommons.Interop;
 using Penumbra.Api.Enums;
 using ReactToMe.Effects;
 using ReactToMe.Ipc;
 using ReactToMe.JobSkills;
+using ReactToMe.OverlayModBuilder;
 using ReactToMe.Triggers;
 
 namespace ReactToMe.Windows;
@@ -27,10 +32,15 @@ public class ConfigWindow : Window, IDisposable
     private IReadOnlyDictionary<Guid, MoodleInfo> moodles = new Dictionary<Guid, MoodleInfo>();
     private IReadOnlyDictionary<string, string> penumbraMods = new Dictionary<string, string>();
     private readonly Dictionary<string, IReadOnlyDictionary<string, (string[] Options, GroupType Type)>> penumbraModSettingsCache = new();
+    private IReadOnlyDictionary<string, string> textureOverlayCandidates = new Dictionary<string, string>();
     private bool listsLoaded;
+    private readonly HashSet<Guid> busyOverlayProjectIds = new();
+    private readonly Dictionary<string, (DateTime LastWriteUtc, IDalamudTextureWrap Wrap)> overlayPreviewWraps = new();
 
     private Guid? selectedTriggerId;
     private string triggerListFilter = string.Empty;
+
+    private Guid? selectedOverlayProjectId;
 
     public ConfigWindow(Plugin plugin) : base("ReactToMe Configuration###ReactToMe config window")
     {
@@ -48,7 +58,12 @@ public class ConfigWindow : Window, IDisposable
         configuration = plugin.Configuration;
     }
 
-    public void Dispose() { }
+    public void Dispose()
+    {
+        foreach (var (_, wrap) in overlayPreviewWraps.Values)
+            wrap.Dispose();
+        overlayPreviewWraps.Clear();
+    }
 
     public override void PreDraw()
     {
@@ -72,6 +87,7 @@ public class ConfigWindow : Window, IDisposable
         moodles = plugin.MoodlesIpc.GetMoodles();
         penumbraMods = plugin.PenumbraIpc.GetMods();
         penumbraModSettingsCache.Clear();
+        textureOverlayCandidates = plugin.PenumbraIpc.GetTextureOverlayCandidates();
         listsLoaded = true;
     }
 
@@ -117,6 +133,12 @@ public class ConfigWindow : Window, IDisposable
             if (ImGui.BeginTabItem("Triggers"))
             {
                 DrawTriggersTab();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Overlay Mod Builder"))
+            {
+                DrawOverlayModBuilderTab();
                 ImGui.EndTabItem();
             }
 
@@ -173,6 +195,394 @@ public class ConfigWindow : Window, IDisposable
         {
             configuration.RevertOnRelog = revertOnRelog;
             configuration.Save();
+        }
+    }
+
+    /// <summary>Authoring workflow for a permanent, multi-stage Penumbra mod baked from imported overlay
+    /// images — entirely independent of trigger configuration. Once applied, a project's generated mod is
+    /// picked by a trigger's existing staged-Penumbra-mod reaction exactly like any other pre-built mod;
+    /// this tab never touches trigger-firing behavior.</summary>
+    private void DrawOverlayModBuilderTab()
+    {
+        ImGui.Spacing();
+        ImGui.TextUnformatted($"Overlay Mod Builder Projects ({configuration.OverlayModBuilderProjects.Count})");
+
+        ImGui.SameLine();
+        if (ImGui.Button("Refresh lists"))
+            RefreshLists();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Re-fetches the textures currently resolving on your character — use this after changing gear/mods.");
+
+        ImGui.SameLine();
+        if (ImGui.Button("Add Project"))
+        {
+            var newProject = new OverlayModBuilderProject();
+            configuration.OverlayModBuilderProjects.Add(newProject);
+            selectedOverlayProjectId = newProject.Id;
+            configuration.Save();
+        }
+
+        ImGui.Separator();
+
+        var listWidth = MathF.Max(180f, ImGui.GetContentRegionAvail().X * 0.3f);
+
+        ImGui.BeginChild("overlayProjectList", new Vector2(listWidth, 0), true);
+        DrawOverlayProjectList();
+        ImGui.EndChild();
+
+        ImGui.SameLine();
+
+        ImGui.BeginChild("overlayProjectDetail", new Vector2(0, 0), true);
+        var selected = configuration.OverlayModBuilderProjects.FirstOrDefault(p => p.Id == selectedOverlayProjectId);
+        if (selected == null)
+            ImGui.TextDisabled("Select a project on the left, or add one.");
+        else
+            DrawOverlayProjectDetail(selected);
+        ImGui.EndChild();
+
+        // Opened outside every stage's PushID scope so the popup's identity never gets mangled by whichever
+        // stage's thumbnail was clicked.
+        if (overlayPreviewPopupShouldOpen)
+        {
+            ImGui.OpenPopup("Overlay Preview");
+            overlayPreviewPopupShouldOpen = false;
+        }
+
+        DrawOverlayPreviewPopup();
+    }
+
+    private string? overlayPreviewToEnlarge;
+    private bool overlayPreviewPopupShouldOpen;
+
+    private void DrawOverlayPreviewPopup()
+    {
+        ImGui.SetNextWindowSize(new Vector2(640, 640), ImGuiCond.FirstUseEver);
+        var open = true;
+        if (!ImGui.BeginPopupModal("Overlay Preview", ref open))
+            return;
+
+        if (overlayPreviewToEnlarge != null && File.Exists(overlayPreviewToEnlarge) && TryGetOverlayPreviewWrap(overlayPreviewToEnlarge, out var wrap))
+        {
+            var avail = ImGui.GetContentRegionAvail();
+            var scale = MathF.Min(avail.X / wrap.Width, avail.Y / wrap.Height);
+            ImGui.Image(wrap.Handle, new Vector2(wrap.Width * scale, wrap.Height * scale));
+        }
+        else
+        {
+            ImGui.TextDisabled("(preview no longer available)");
+        }
+
+        if (!open)
+            ImGui.CloseCurrentPopup();
+
+        ImGui.EndPopup();
+    }
+
+    /// <summary>Runs a long-running overlay-mod-builder operation in the background, marking the project
+    /// busy for its duration so its buttons can disable themselves instead of the operation reporting its
+    /// own progress to chat — the UI itself (snapshot/stage state, "Applied to Penumbra") already reflects
+    /// the result once it's done.</summary>
+    private void RunOverlayBusyTask(Guid projectId, Func<Task> action)
+    {
+        busyOverlayProjectIds.Add(projectId);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await action();
+            }
+            finally
+            {
+                busyOverlayProjectIds.Remove(projectId);
+                configuration.Save();
+            }
+        });
+    }
+
+    private void DrawOverlayProjectList()
+    {
+        foreach (var project in configuration.OverlayModBuilderProjects)
+        {
+            var label = project.IsApplied ? project.DisplayName : $"{project.DisplayName} (not applied)";
+            ImGui.PushID(project.Id.GetHashCode());
+            if (ImGui.Selectable(label, project.Id == selectedOverlayProjectId))
+                selectedOverlayProjectId = project.Id;
+            ImGui.PopID();
+        }
+    }
+
+    private void DrawOverlayProjectDetail(OverlayModBuilderProject project)
+    {
+        ImGui.PushID(project.Id.GetHashCode());
+
+        if (ImGui.Button("Remove Project"))
+        {
+            configuration.OverlayModBuilderProjects.Remove(project);
+            selectedOverlayProjectId = null;
+            configuration.Save();
+            ImGui.PopID();
+            return;
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Removes this project from ReactToMe. Does not delete the mod already registered with Penumbra — remove that separately from Penumbra's own mod list if you want it gone too.");
+
+        var name = project.DisplayName;
+        if (ImGui.InputText("Display name", ref name, 64))
+        {
+            project.DisplayName = name;
+            configuration.Save();
+        }
+
+        ImGui.TextDisabled(project.IsApplied ? "Applied to Penumbra" : "Not applied yet");
+
+        ImGui.Separator();
+        ImGui.TextDisabled("Base texture (read from)");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Every texture currently resolving on your character — search for whatever mod/texture you want to use as the base to build tattoo/skin overlays on top of (e.g. type \"kaede\" or \"body\"). Not filtered by naming convention, since body mods vary too much to auto-detect reliably. The generated mod always redirects \"" + OverlayModWriter.RedirectGamePath + "\" once applied, regardless of what you pick here.");
+
+        var displayItems = textureOverlayCandidates.ToDictionary(
+            kv => kv.Key,
+            kv => kv.Value.Length > 0 ? $"{kv.Key} ({Path.GetFileName(kv.Value)})" : kv.Key);
+
+        if (DrawSearchablePicker("Target", $"{project.Id}-overlay-target", displayItems, project.SourceGamePath, string.Empty, out var newTarget))
+        {
+            project.SourceGamePath = newTarget;
+            project.TargetActualPath = textureOverlayCandidates.GetValueOrDefault(newTarget, string.Empty);
+            configuration.Save();
+        }
+
+        if (project.TargetActualPath.Length == 0)
+        {
+            ImGui.PopID();
+            return;
+        }
+
+        ImGui.Spacing();
+        var isBusy = busyOverlayProjectIds.Contains(project.Id);
+        var hasSnapshot = project.PristineSnapshotPath.Length > 0 && File.Exists(project.PristineSnapshotPath);
+        ImGui.BeginDisabled(isBusy);
+        if (ImGui.Button(hasSnapshot ? "Recapture Snapshot" : "Capture Snapshot"))
+            RunOverlayBusyTask(project.Id, () => plugin.OverlayModBuilderService.CaptureSnapshotAsync(project));
+        ImGui.EndDisabled();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Reads the target texture as it's currently resolving and stores it as this project's base — every stage bakes against this same snapshot, never the live texture at bake time. Recapture explicitly if you change your skin/body mod and want stages to reflect it.");
+
+        ImGui.SameLine();
+        ImGui.TextDisabled(isBusy ? "Working..." : hasSnapshot ? "Snapshot captured" : "No snapshot yet");
+
+        if (!hasSnapshot)
+        {
+            ImGui.PopID();
+            return;
+        }
+
+        ImGui.Separator();
+        ImGui.TextDisabled("Stages (each becomes one option in the generated mod)");
+
+        var removeIndex = -1;
+        for (var s = 0; s < project.Stages.Count; s++)
+        {
+            var stage = project.Stages[s];
+            ImGui.PushID(s);
+
+            if (stage.IsBaseline)
+            {
+                ImGui.TextUnformatted("Stage 0 — Baseline (from snapshot, no overlay)");
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("Auto-generated from this project's pristine snapshot every time it's captured or recaptured. Not removable — every later stage's chain starts from it.");
+            }
+            else
+            {
+                var stageName = stage.Name;
+                ImGui.SetNextItemWidth(160);
+                if (ImGui.InputText("Name", ref stageName, 64))
+                {
+                    stage.Name = stageName;
+                    configuration.Save();
+                }
+
+                ImGui.SameLine();
+                ImGui.TextUnformatted(stage.OverlayImagePath.Length > 0 ? Path.GetFileName(stage.OverlayImagePath) : "(no image)");
+
+                ImGui.SameLine();
+                ImGui.BeginDisabled(isBusy);
+                if (ImGui.Button("Browse..."))
+                {
+                    var capturedProject = project;
+                    var capturedStage = stage;
+                    var capturedIndex = s;
+                    OpenFileDialog.SelectFile(
+                        ofn =>
+                        {
+                            var imported = ImportOverlayImage(capturedProject.Id, capturedIndex, ofn.file);
+                            if (imported == null)
+                                return;
+
+                            capturedStage.OverlayImagePath = imported;
+                            configuration.Save();
+                            RunOverlayBusyTask(capturedProject.Id, () => plugin.OverlayModBuilderService.BakeStageAsync(capturedProject, capturedStage));
+                        },
+                        title: "Select overlay image",
+                        fileTypes: [("Images", new[] { "png" })]);
+                }
+
+                ImGui.SameLine();
+                if (ImGui.Button("Remove##removeOverlayStage"))
+                    removeIndex = s;
+                ImGui.EndDisabled();
+            }
+
+            var predecessorBakeVersion = s > 0 ? project.Stages[s - 1].BakeVersion : (int?)null;
+            if (stage.NeedsRebake(project.SnapshotVersion, predecessorBakeVersion))
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(new Vector4(1f, 0.6f, 0.2f, 1f), "(needs rebake — will bake on next Apply)");
+            }
+
+            DrawOverlayStagePreview(project, s);
+
+            ImGui.Separator();
+            ImGui.PopID();
+        }
+
+        if (removeIndex >= 0)
+        {
+            project.Stages.RemoveAt(removeIndex);
+            configuration.Save();
+        }
+
+        if (ImGui.Button("Add Stage"))
+        {
+            // Naming matches this stage's own index: Stage 0 is always the baseline, so the first
+            // user-added stage (landing at index 1) is "Stage 1", not "Stage 2".
+            project.Stages.Add(new OverlayModBuilderStage { Name = $"Stage {project.Stages.Count}" });
+            configuration.Save();
+        }
+
+        ImGui.SameLine();
+        ImGui.BeginDisabled(isBusy);
+        if (ImGui.Button("Apply") && project.Stages.Count > 0)
+            RunOverlayBusyTask(project.Id, () => plugin.OverlayModBuilderService.ApplyProjectAsync(project));
+        ImGui.EndDisabled();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Bakes every stage that needs it, then writes/registers this project's mod with Penumbra. Re-applying updates the same mod in place rather than creating a duplicate.");
+
+        ImGui.SameLine();
+        ImGui.BeginDisabled(isBusy);
+        if (ImGui.Button("Rebake All") && project.Stages.Count > 0)
+            RunOverlayBusyTask(project.Id, () => plugin.OverlayModBuilderService.RebakeAllAsync(project));
+        ImGui.EndDisabled();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Force-bakes every stage regardless of whether it looks up to date, then applies. Use this if a stage's preview or in-game result seems stale or wrong even though nothing looks like it needs rebaking.");
+
+        ImGui.SameLine();
+        ImGui.BeginDisabled(isBusy);
+        if (ImGui.Button("Recreate Mod") && project.Stages.Count > 0)
+            RunOverlayBusyTask(project.Id, () => plugin.OverlayModBuilderService.RecreateModAsync(project));
+        ImGui.EndDisabled();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Use this if you deleted this project's mod directly in Penumbra. Force-rebakes every stage and re-registers the mod from scratch, instead of trying (and failing) to reload a mod Penumbra no longer has any record of.");
+
+        if (isBusy)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(new Vector4(1f, 0.8f, 0.2f, 1f), "Working...");
+        }
+
+        ImGui.Spacing();
+        var priority = project.Priority;
+        ImGui.SetNextItemWidth(120);
+        if (ImGui.InputInt("Priority", ref priority))
+        {
+            project.Priority = priority;
+            configuration.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("This mod's priority against other enabled mods in Penumbra — decides which one wins when more than one redirects the same file (e.g. another mod also touching " + OverlayModWriter.RedirectGamePath + "). 0 is Penumbra's own default; higher wins. Applied every time this project is applied or its mod recreated.");
+
+        ImGui.PopID();
+    }
+
+    /// <summary>Copies the user's picked file into ReactToMe's own plugin data directory, so a project
+    /// never depends on the original external file staying where it was. Returns the managed copy's path,
+    /// or null if the source file doesn't exist.</summary>
+    private static string? ImportOverlayImage(Guid projectId, int stageIndex, string sourcePath)
+    {
+        if (string.IsNullOrEmpty(sourcePath) || !File.Exists(sourcePath))
+            return null;
+
+        var directory = Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "OverlayModBuilderSources");
+        Directory.CreateDirectory(directory);
+
+        var destination = Path.Combine(directory, $"{projectId:N}-stage{stageIndex}{Path.GetExtension(sourcePath)}");
+        File.Copy(sourcePath, destination, overwrite: true);
+        return destination;
+    }
+
+    /// <summary>Shows a small thumbnail of what was actually composited for this stage's last bake attempt,
+    /// so a compositing problem (wrong image, bad UV/resolution match) can be told apart from an
+    /// application problem (the composite looks right but doesn't show up on the character).</summary>
+    private void DrawOverlayStagePreview(OverlayModBuilderProject project, int stageIndex)
+    {
+        var previewPath = plugin.OverlayModBuilderService.GetStagePreviewPath(project, stageIndex);
+        if (previewPath == null || !File.Exists(previewPath))
+        {
+            ImGui.TextDisabled("(no preview yet — bake this stage first)");
+            return;
+        }
+
+        if (!TryGetOverlayPreviewWrap(previewPath, out var wrap))
+        {
+            ImGui.TextDisabled("(preview file exists but failed to load as an image)");
+            return;
+        }
+
+        const float maxDimension = 96f;
+        var scale = MathF.Min(1f, maxDimension / MathF.Max(wrap.Width, wrap.Height));
+        ImGui.TextDisabled("Last composited preview (click to enlarge):");
+        ImGui.Image(wrap.Handle, new Vector2(wrap.Width * scale, wrap.Height * scale));
+        if (ImGui.IsItemClicked())
+        {
+            overlayPreviewToEnlarge = previewPath;
+            overlayPreviewPopupShouldOpen = true;
+        }
+    }
+
+    /// <summary>Decodes a preview PNG ourselves and uploads it as a raw texture, cached and keyed by file
+    /// path + last-write time, instead of Dalamud's own file-backed texture cache
+    /// (<c>ITextureProvider.GetFromFile</c>): that cache is keyed purely by path and doesn't know this
+    /// specific file gets overwritten in place on every rebake, so it can get stuck showing a stale or
+    /// failed load from before the file existed. Re-decodes only when the file's own last-write time moves
+    /// past what's cached.</summary>
+    private bool TryGetOverlayPreviewWrap(string previewPath, out IDalamudTextureWrap wrap)
+    {
+        var lastWriteUtc = File.GetLastWriteTimeUtc(previewPath);
+        if (overlayPreviewWraps.TryGetValue(previewPath, out var cached) && cached.LastWriteUtc == lastWriteUtc)
+        {
+            wrap = cached.Wrap;
+            return true;
+        }
+
+        try
+        {
+            using var image = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgba32>(previewPath);
+            var pixels = new byte[image.Width * image.Height * 4];
+            image.CopyPixelDataTo(pixels);
+
+            var newWrap = Plugin.TextureProvider.CreateFromRaw(RawImageSpecification.Rgba32(image.Width, image.Height), pixels, "ReactToMe overlay preview");
+
+            if (overlayPreviewWraps.TryGetValue(previewPath, out var old))
+                old.Wrap.Dispose();
+
+            overlayPreviewWraps[previewPath] = (lastWriteUtc, newWrap);
+            wrap = newWrap;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Plugin.Log.Warning(ex, "Overlay mod builder: failed to decode preview {PreviewPath}", previewPath);
+            wrap = null!;
+            return false;
         }
     }
 

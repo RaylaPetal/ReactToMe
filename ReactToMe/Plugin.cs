@@ -11,6 +11,7 @@ using ReactToMe.Effects;
 using ReactToMe.Emotes;
 using ReactToMe.Ipc;
 using ReactToMe.JobSkills;
+using ReactToMe.OverlayModBuilder;
 using ReactToMe.Triggers;
 using ReactToMe.Windows;
 
@@ -42,6 +43,7 @@ public sealed class Plugin : IDalamudPlugin
     public EmoteCatalog EmoteCatalog { get; init; }
     public JobSkillCatalog JobSkillCatalog { get; init; }
     public ChatMessageSender ChatMessageSender { get; init; }
+    public OverlayModBuilderService OverlayModBuilderService { get; init; }
 
     private readonly EmotePoller emotePoller;
     private readonly JobSkillPoller jobSkillPoller;
@@ -60,6 +62,12 @@ public sealed class Plugin : IDalamudPlugin
         EmoteCatalog = new EmoteCatalog(DataManager);
         JobSkillCatalog = new JobSkillCatalog(DataManager);
         ChatMessageSender = new ChatMessageSender(Log, ChatGui);
+        OverlayModBuilderService = new OverlayModBuilderService(
+            PenumbraIpc,
+            new TextureCompositor(PenumbraIpc, Log),
+            new OverlayModWriter(PenumbraIpc, Log),
+            Log,
+            ChatGui);
 
         emotePoller = new EmotePoller(ObjectTable, Log);
         emotePoller.EmotePerformed += OnEmotePerformed;
@@ -181,6 +189,30 @@ public sealed class Plugin : IDalamudPlugin
         {
             EffectRegistry.RevertAll();
             ChatGui.Print("[ReactToMe] Cleared active effects.");
+            return;
+        }
+
+        if (args.Trim().Equals("spiketest", StringComparison.OrdinalIgnoreCase))
+        {
+            // Throwaway spike for the overlay-mod-builder openspec change, task 1 — see SpikeTest.cs.
+            _ = OverlayModBuilder.SpikeTest.RunAsync(PluginInterface, ChatGui, Log);
+            return;
+        }
+
+        if (args.Trim().Equals("spiketest reload", StringComparison.OrdinalIgnoreCase))
+        {
+            _ = OverlayModBuilder.SpikeTest.RunReloadAsync(PluginInterface, ChatGui, Log);
+            return;
+        }
+
+        if (args.Trim().StartsWith("spiketest priority ", StringComparison.OrdinalIgnoreCase))
+        {
+            // Throwaway spike for the overlay-mod-builder-enhancements openspec change, task 1 — see SpikeTest.cs.
+            var priorityArg = args.Trim()["spiketest priority ".Length..].Trim();
+            if (int.TryParse(priorityArg, out var priority))
+                OverlayModBuilder.SpikeTest.RunPriority(PluginInterface, ChatGui, Log, priority);
+            else
+                ChatGui.PrintError($"[ReactToMe] Spike test: \"{priorityArg}\" isn't a valid integer priority.");
             return;
         }
 

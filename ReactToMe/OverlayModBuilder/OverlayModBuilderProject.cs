@@ -1,0 +1,128 @@
+using System;
+using System.Collections.Generic;
+
+namespace ReactToMe.OverlayModBuilder;
+
+/// <summary>One named stage of an <see cref="OverlayModBuilderProject"/>: an imported overlay image, baked
+/// against the project's pristine snapshot into that stage's own file inside the generated mod folder
+/// (see <see cref="OverlayModWriter"/>). Baking happens only on save and via explicit rebake/recapture —
+/// never automatically — so this tracks what the last successful bake used, to tell whether a later apply
+/// needs to re-bake this stage.</summary>
+[Serializable]
+public class OverlayModBuilderStage
+{
+    /// <summary>Shown as this stage's Penumbra option name once the project is applied.</summary>
+    public string Name { get; set; } = "Stage";
+
+    /// <summary>ReactToMe's own managed copy of the imported overlay image — never the user's original
+    /// external file path, so moving or deleting that original elsewhere doesn't break the project. Always
+    /// empty for the implicit baseline stage (<see cref="IsBaseline"/>): it has no overlay of its own, only
+    /// the pristine snapshot.</summary>
+    public string OverlayImagePath { get; set; } = string.Empty;
+
+    /// <summary>Whether this is the implicit "Stage 0" baseline auto-generated from the project's pristine
+    /// snapshot with no overlay applied — always at index 0, never user-removable, and the base every other
+    /// stage's chain ultimately starts from. See <see cref="OverlayModBuilderService.CaptureSnapshotAsync"/>.</summary>
+    public bool IsBaseline { get; set; }
+
+    /// <summary>The overlay image path and pristine-snapshot version the last successful bake used,
+    /// compared against this stage's and its project's current values to decide whether it needs baking.
+    /// Empty <see cref="LastBakedOverlayImagePath"/> means this stage has never been successfully baked, or
+    /// its last bake failed — such a stage is left out of the generated mod entirely (see
+    /// <see cref="OverlayModWriter.ApplyProject"/>) rather than applied broken. Not consulted for a baseline
+    /// stage, since its overlay image is always (validly) empty — see <see cref="NeedsRebake"/>.</summary>
+    public string LastBakedOverlayImagePath { get; set; } = string.Empty;
+
+    public int LastBakedSnapshotVersion { get; set; } = -1;
+
+    /// <summary>The <see cref="OverlayModWriter.StageFileSchemeVersion"/> in effect during this stage's last
+    /// successful bake. A code-level change to where/how stage files are laid out on disk invalidates every
+    /// already-baked stage the same way a changed overlay image or recaptured snapshot would, but neither of
+    /// those fields can ever reflect that — this one exists specifically so bumping the scheme version
+    /// forces a re-bake automatically instead of silently leaving stages pointing at a stale location.</summary>
+    public int LastBakedFileSchemeVersion { get; set; } = -1;
+
+    /// <summary>Incremented every time this stage successfully bakes — lets the *next* stage in the chain
+    /// detect that its own base (this stage's baked output) has changed, via
+    /// <see cref="LastBakedPredecessorVersion"/>.</summary>
+    public int BakeVersion { get; set; }
+
+    /// <summary>The immediately preceding stage's <see cref="BakeVersion"/> at the time this stage last
+    /// baked. Not applicable to the baseline stage (it has no predecessor — it bakes from the pristine
+    /// snapshot directly). A mismatch against the predecessor's current <see cref="BakeVersion"/> means the
+    /// predecessor rebaked since, so this stage's own chained output is now stale too.</summary>
+    public int LastBakedPredecessorVersion { get; set; } = -1;
+
+    /// <summary>Whether this stage needs (re-)baking: never successfully baked, its source image has
+    /// changed since its last successful bake, the project's pristine snapshot has been recaptured since
+    /// then, the on-disk file scheme itself has changed since then, or (for a non-baseline stage) the
+    /// immediately preceding stage in the chain has rebaked since this stage last did.</summary>
+    public bool NeedsRebake(int currentSnapshotVersion, int? predecessorBakeVersion)
+    {
+        if (!IsBaseline && (string.IsNullOrEmpty(LastBakedOverlayImagePath) || LastBakedOverlayImagePath != OverlayImagePath))
+            return true;
+
+        if (LastBakedSnapshotVersion != currentSnapshotVersion)
+            return true;
+
+        if (LastBakedFileSchemeVersion != OverlayModWriter.StageFileSchemeVersion)
+            return true;
+
+        return predecessorBakeVersion.HasValue && LastBakedPredecessorVersion != predecessorBakeVersion.Value;
+    }
+}
+
+/// <summary>
+/// A permanent-Penumbra-mod authoring project: pick a target texture, capture a pristine snapshot of it
+/// once, add any number of named stages each with an imported overlay image, and apply to write/update a
+/// real Penumbra mod with one single-select option per stage. Independent of any <see cref="Triggers.ReactionTrigger"/> —
+/// a trigger's existing staged-Penumbra-mod reaction picks the generated mod's group/options afterward,
+/// exactly like any other pre-built mod.
+/// </summary>
+[Serializable]
+public class OverlayModBuilderProject
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+
+    public string DisplayName { get; set; } = "New Overlay Project";
+
+    /// <summary>The picked candidate's own reported game path — purely cosmetic bookkeeping so the target
+    /// picker re-selects the same entry when the project is reopened. Never used to decide what the
+    /// generated mod redirects: that is always the fixed <see cref="OverlayModWriter.RedirectGamePath"/>, no
+    /// exceptions, since this tool only ever builds staged overlays on top of the Bibo body base texture.
+    /// Some picked candidates report their own absolute file path here instead of a clean virtual one (e.g.
+    /// a mod that rewrites a material to reference its own file directly) — that's fine, this field is never
+    /// interpreted as a real game path, only compared back against the candidate list for re-selection.</summary>
+    public string SourceGamePath { get; set; } = string.Empty;
+
+    /// <summary>The actual file this project reads pixel data from when (re)capturing its pristine
+    /// snapshot — the resolved path of whatever candidate was picked. This is the only thing a project
+    /// actually needs to know to build itself; what it becomes once applied (always
+    /// <see cref="OverlayModWriter.RedirectGamePath"/>) is fixed and unrelated to this value. Empty = no
+    /// target chosen yet.</summary>
+    public string TargetActualPath { get; set; } = string.Empty;
+
+    /// <summary>Path to the pristine snapshot of <see cref="TargetActualPath"/>, captured once (or
+    /// re-captured explicitly) and reused as the base for every stage's bake — never the live texture at
+    /// bake time, and never another stage's output. Empty = not captured yet; stages cannot be baked until
+    /// it is.</summary>
+    public string PristineSnapshotPath { get; set; } = string.Empty;
+
+    /// <summary>Incremented every time the snapshot is recaptured, so a stage baked against an older
+    /// snapshot can tell it's now stale even though <see cref="PristineSnapshotPath"/> itself didn't
+    /// change (recapturing overwrites the same file in place).</summary>
+    public int SnapshotVersion { get; set; }
+
+    /// <summary>Whether this project's mod has been registered with Penumbra at least once — determines
+    /// whether the next apply calls <c>AddMod</c> (first time) or <c>ReloadMod</c> (every time after).</summary>
+    public bool IsApplied { get; set; }
+
+    /// <summary>This project's generated mod's priority in the local player's active collection — Penumbra's
+    /// own inter-mod conflict resolution, applied via <see cref="Ipc.PenumbraIpc.SetModPriority"/> whenever
+    /// the project is applied or its mod is recreated. Defaults to 0, Penumbra's own default for a
+    /// newly-registered mod, so a project that never touches this behaves exactly as before this field
+    /// existed.</summary>
+    public int Priority { get; set; }
+
+    public List<OverlayModBuilderStage> Stages { get; set; } = [];
+}
