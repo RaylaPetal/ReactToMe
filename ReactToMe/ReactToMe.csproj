@@ -7,7 +7,7 @@
     <Name>ReactToMe</Name>
     <Punchline>Reacts to emotes performed on you with a temporary Glamourer design and Moodle.</Punchline>
     <Description>Listens for emotes targeted at you and applies a configured Glamourer design and Moodles status in response, automatically reverting the Glamourer design after a set duration.</Description>
-    <RepoUrl>https://github.com/tnascimbeni/ReactToMe</RepoUrl>
+    <RepoUrl>https://github.com/RaylaPetal/ReactToMe</RepoUrl>
     <Tags>emote;glamourer;moodles;automation</Tags>
   </PropertyGroup>
 

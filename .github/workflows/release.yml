@@ -16,6 +16,8 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
 
     - name: Install .NET
       uses: actions/setup-dotnet@v5
@@ -33,8 +35,58 @@ jobs:
     - name: Zip plugin
       run: Compress-Archive -Path .\ReactToMe\bin\x64\Release\* -DestinationPath .\ReactToMe.zip
 
+    # Saved outside the git working tree so it survives the branch switch below, which needs a
+    # clean working tree (the tag's commit and master can differ, e.g. commits landed on master
+    # after the tag was cut).
+    - name: Save built manifest
+      shell: pwsh
+      run: Copy-Item -Path ReactToMe\bin\x64\Release\ReactToMe.json -Destination "$env:RUNNER_TEMP\manifest.json"
+
     - name: Create GitHub release
       uses: softprops/action-gh-release@v2
       with:
         files: ReactToMe.zip
         generate_release_notes: true
+
+    # Runs on master, not the tag's detached commit, so this never rewrites history that landed
+    # on master after the tag was cut.
+    - name: Regenerate and commit repo.json on master
+      shell: pwsh
+      run: |
+        git fetch origin master
+        git checkout master
+
+        $manifest = Get-Content "$env:RUNNER_TEMP\manifest.json" -Raw | ConvertFrom-Json
+        $zipUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/ReactToMe.zip"
+        $lastUpdate = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+
+        $entry = [ordered]@{
+          Author              = $manifest.Author
+          Name                = $manifest.Name
+          InternalName        = $manifest.InternalName
+          Description         = $manifest.Description
+          Punchline           = $manifest.Punchline
+          RepoUrl             = $manifest.RepoUrl
+          ApplicableVersion   = $manifest.ApplicableVersion
+          Tags                = $manifest.Tags
+          DalamudApiLevel     = $manifest.DalamudApiLevel
+          AssemblyVersion     = $manifest.AssemblyVersion
+          IsHide              = $false
+          IsTestingExclusive  = $false
+          DownloadLinkInstall = $zipUrl
+          DownloadLinkUpdate  = $zipUrl
+          LastUpdate          = $lastUpdate
+        }
+
+        ConvertTo-Json -InputObject @($entry) -Depth 5 | Set-Content -Path repo.json -Encoding utf8
+
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add repo.json
+        git diff --cached --quiet
+        if ($LASTEXITCODE -eq 0) {
+          Write-Host "repo.json unchanged, nothing to commit."
+        } else {
+          git commit -m "chore: update repo.json for ${{ github.ref_name }}"
+          git push origin master
+        }

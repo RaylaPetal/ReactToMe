@@ -1,0 +1,24 @@
+[
+  {
+    "Author": "Rayla Petal",
+    "Name": "ReactToMe",
+    "InternalName": "ReactToMe",
+    "Description": "Listens for emotes targeted at you and applies a configured Glamourer design and Moodles status in response, automatically reverting the Glamourer design after a set duration.",
+    "Punchline": "Reacts to emotes performed on you with a temporary Glamourer design and Moodle.",
+    "RepoUrl": "https://github.com/RaylaPetal/ReactToMe",
+    "ApplicableVersion": "any",
+    "Tags": [
+      "emote",
+      "glamourer",
+      "moodles",
+      "automation"
+    ],
+    "DalamudApiLevel": 15,
+    "AssemblyVersion": "0.0.0.1",
+    "IsHide": false,
+    "IsTestingExclusive": false,
+    "DownloadLinkInstall": "https://github.com/RaylaPetal/ReactToMe/releases/download/v0.0.0.1/ReactToMe.zip",
+    "DownloadLinkUpdate": "https://github.com/RaylaPetal/ReactToMe/releases/download/v0.0.0.1/ReactToMe.zip",
+    "LastUpdate": "0"
+  }
+]
