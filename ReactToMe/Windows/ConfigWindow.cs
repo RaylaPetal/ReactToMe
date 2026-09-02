@@ -43,6 +43,10 @@ public class ConfigWindow : Window, IDisposable
     private bool forceSelectTriggersTab;
     private Guid? pendingRemoveTriggerId;
     private string triggerListFilter = string.Empty;
+    private bool tutorialPopupShouldOpen;
+    private int tutorialStepIndex;
+    private bool overlayTutorialPopupShouldOpen;
+    private int overlayTutorialStepIndex;
 
     private Guid? selectedOverlayProjectId;
 
@@ -177,9 +181,37 @@ public class ConfigWindow : Window, IDisposable
                 ? $"reverts in {FormatRemaining(expiresAt - now)}"
                 : "no expiration";
             ImGui.TextUnformatted($"{label} — {status}");
+
+            ImGui.Indent();
+
+            if (trigger != null && trigger.GlamourerDesignId != Guid.Empty)
+            {
+                var designName = designs.TryGetValue(trigger.GlamourerDesignId, out var appliedDesignName) ? appliedDesignName : "(unknown design)";
+                var revertTarget = effect.RevertMode == GlamourerRevertMode.SpecificDesign && effect.RevertToDesignId != Guid.Empty
+                    ? designs.TryGetValue(effect.RevertToDesignId, out var revertDesignName) ? revertDesignName : "(unknown design)"
+                    : "automation";
+                ImGui.TextDisabled($"Glamourer: {designName} (reverts to {revertTarget})");
+            }
+
+            if (trigger != null && trigger.MoodleGuid != Guid.Empty)
+            {
+                var moodleName = moodles.TryGetValue(trigger.MoodleGuid, out var moodleInfo) ? MoodleTitleFormatter.StripTags(moodleInfo.RawTitle) : "(unknown moodle)";
+                ImGui.TextDisabled($"Moodle: {moodleName} (expires on its own preset duration)");
+            }
+
+            if (trigger != null && trigger.GetEffectivePenumbraMode() != PenumbraReactionMode.None)
+            {
+                var stageText = effect.PenumbraCurrentModName.Length > 0
+                    ? $"{effect.PenumbraCurrentModName} — {effect.PenumbraCurrentOptionName}"
+                    : "no stage active yet";
+                ImGui.TextDisabled($"Penumbra: fire count {effect.FireCount} — {stageText}");
+            }
+
+            ImGui.Unindent();
+            ImGui.Spacing();
         }
 
-        ImGui.Spacing();
+        ImGui.Separator();
         if (ImGui.Button("Force revert all"))
             plugin.EffectRegistry.RevertAll();
     }
@@ -331,8 +363,26 @@ public class ConfigWindow : Window, IDisposable
             selectedOverlayProjectId = newProject.Id;
             configuration.Save();
         }
+        DrawHelpMarker("Creates a blank project to configure.");
+
+        const string overlayTutorialLabel = "Tutorial";
+        var overlayTutorialButtonWidth = ImGui.CalcTextSize(overlayTutorialLabel).X + ImGui.GetStyle().FramePadding.X * 2f;
+        ImGui.SameLine(ImGui.GetContentRegionMax().X - overlayTutorialButtonWidth);
+        if (ImGui.Button(overlayTutorialLabel))
+        {
+            overlayTutorialStepIndex = 0;
+            overlayTutorialPopupShouldOpen = true;
+        }
 
         ImGui.Separator();
+
+        if (overlayTutorialPopupShouldOpen)
+        {
+            ImGui.OpenPopup("Overlay Mod Builder Tutorial");
+            overlayTutorialPopupShouldOpen = false;
+        }
+
+        DrawTutorialPopup("Overlay Mod Builder Tutorial", OverlayTutorialSteps, ref overlayTutorialStepIndex);
 
         var listWidth = MathF.Max(180f, ImGui.GetContentRegionAvail().X * 0.3f);
 
@@ -360,6 +410,38 @@ public class ConfigWindow : Window, IDisposable
 
         DrawOverlayPreviewPopup();
     }
+
+    /// <summary>Static, illustrative example content for the Overlay Mod Builder walkthrough — never read
+    /// from <see cref="Configuration.OverlayModBuilderProjects"/> or the currently selected project, so the
+    /// walkthrough stays read-only by construction (see design.md - Decisions).</summary>
+    private static readonly TutorialStep[] OverlayTutorialSteps =
+    [
+        new TutorialStep(
+            "1. Target texture — what you're building on top of",
+            "Every project starts with a Target: the texture stages layer their overlays onto.\n\n" +
+            "Pick it from \"Base texture (read from)\" — every texture currently resolving on your character, " +
+            "plus every installed mod's own declared texture, searchable by name (e.g. \"kaede\" or \"body\").\n\n" +
+            "This is just where pixels are read from — the generated mod always redirects the same fixed body " +
+            "texture path once applied, regardless of which target you pick here."),
+        new TutorialStep(
+            "2. Snapshot — capturing your starting point",
+            "Once a target is picked, \"Capture Snapshot\" reads it as currently resolving and stores it as this " +
+            "project's pristine base.\n\n" +
+            "Every stage bakes against this same snapshot — never the live texture at bake time — so your look " +
+            "stays stable while you work. Recapture explicitly later if you change your skin/body mod."),
+        new TutorialStep(
+            "3. Stages — layering overlay images",
+            "\"Add Stage\", then \"Browse...\" to pick a PNG overlay image for it. Each stage bakes its overlay " +
+            "onto the previous stage's own baked output, not the pristine snapshot directly — so Stage 2 builds " +
+            "on Stage 1's result, and so on.\n\n" +
+            "Stage 0 is always the baseline: your snapshot with no overlay, generated automatically."),
+        new TutorialStep(
+            "4. Apply — turning it into a real mod",
+            "\"Apply\" bakes every stage that needs it, then writes and registers a real Penumbra mod with one " +
+            "option per stage. Re-applying later updates that same mod in place instead of duplicating it.\n\n" +
+            "Once applied, \"Create Trigger\" is the natural next step — it builds a trigger with one threshold " +
+            "per baked stage, already pointing at this project's mod."),
+    ];
 
     private string? overlayPreviewToEnlarge;
     private bool overlayPreviewPopupShouldOpen;
@@ -473,6 +555,7 @@ public class ConfigWindow : Window, IDisposable
             project.DisplayName = name;
             configuration.Save();
         }
+        DrawHelpMarker("Shown in the project list on the left.");
 
         ImGui.TextDisabled(project.IsApplied ? "Applied to Penumbra" : "Not applied yet");
 
@@ -491,6 +574,7 @@ public class ConfigWindow : Window, IDisposable
             project.TargetActualPath = textureOverlayCandidates.GetValueOrDefault(newTarget, string.Empty);
             configuration.Save();
         }
+        DrawHelpMarker("The base texture stages build on top of. Picked from the list above (\"Base texture (read from)\") — searching narrows it, e.g. \"kaede\" or \"body\".");
 
         if (project.TargetActualPath.Length == 0)
         {
@@ -505,8 +589,7 @@ public class ConfigWindow : Window, IDisposable
         if (ImGui.Button(hasSnapshot ? "Recapture Snapshot" : "Capture Snapshot"))
             RunOverlayBusyTask(project.Id, () => plugin.OverlayModBuilderService.CaptureSnapshotAsync(project));
         ImGui.EndDisabled();
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Reads the target texture as it's currently resolving and stores it as this project's base — every stage bakes against this same snapshot, never the live texture at bake time. Recapture explicitly if you change your skin/body mod and want stages to reflect it.");
+        DrawHelpMarker("Reads the target texture as it's currently resolving and stores it as this project's base — every stage bakes against this same snapshot, never the live texture at bake time. Recapture explicitly if you change your skin/body mod and want stages to reflect it.");
 
         ImGui.SameLine();
         ImGui.TextDisabled(isBusy ? "Working..." : hasSnapshot ? "Snapshot captured" : "No snapshot yet");
@@ -529,8 +612,7 @@ public class ConfigWindow : Window, IDisposable
             if (stage.IsBaseline)
             {
                 ImGui.TextUnformatted("Stage 0 — Baseline (from snapshot, no overlay)");
-                if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip("Auto-generated from this project's pristine snapshot every time it's captured or recaptured. Not removable — every later stage's chain starts from it.");
+                DrawHelpMarker("Auto-generated from this project's pristine snapshot every time it's captured or recaptured. Not removable — every later stage's chain starts from it.");
             }
             else
             {
@@ -541,6 +623,7 @@ public class ConfigWindow : Window, IDisposable
                     stage.Name = stageName;
                     configuration.Save();
                 }
+                DrawHelpMarker("Just a label — the option name shown for this stage once the mod is applied.");
 
                 ImGui.SameLine();
                 ImGui.TextUnformatted(stage.OverlayImagePath.Length > 0 ? Path.GetFileName(stage.OverlayImagePath) : "(no image)");
@@ -599,30 +682,28 @@ public class ConfigWindow : Window, IDisposable
             project.Stages.Add(new OverlayModBuilderStage { Name = $"Stage {project.Stages.Count}" });
             configuration.Save();
         }
+        DrawHelpMarker("Adds a new stage. Its overlay image bakes onto the previous stage's own baked output, not the pristine snapshot directly.");
 
         ImGui.SameLine();
         ImGui.BeginDisabled(isBusy);
         if (ImGui.Button("Apply") && project.Stages.Count > 0)
             RunOverlayBusyTask(project.Id, () => plugin.OverlayModBuilderService.ApplyProjectAsync(project));
         ImGui.EndDisabled();
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Bakes every stage that needs it, then writes/registers this project's mod with Penumbra. Re-applying updates the same mod in place rather than creating a duplicate.");
+        DrawHelpMarker("Bakes every stage that needs it, then writes/registers this project's mod with Penumbra. Re-applying updates the same mod in place rather than creating a duplicate.");
 
         ImGui.SameLine();
         ImGui.BeginDisabled(isBusy);
         if (ImGui.Button("Rebake All") && project.Stages.Count > 0)
             RunOverlayBusyTask(project.Id, () => plugin.OverlayModBuilderService.RebakeAllAsync(project));
         ImGui.EndDisabled();
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Force-bakes every stage regardless of whether it looks up to date, then applies. Use this if a stage's preview or in-game result seems stale or wrong even though nothing looks like it needs rebaking.");
+        DrawHelpMarker("Force-bakes every stage regardless of whether it looks up to date, then applies. Use this if a stage's preview or in-game result seems stale or wrong even though nothing looks like it needs rebaking.");
 
         ImGui.SameLine();
         ImGui.BeginDisabled(isBusy);
         if (ImGui.Button("Recreate Mod") && project.Stages.Count > 0)
             RunOverlayBusyTask(project.Id, () => plugin.OverlayModBuilderService.RecreateModAsync(project));
         ImGui.EndDisabled();
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Use this if you deleted this project's mod directly in Penumbra. Force-rebakes every stage and re-registers the mod from scratch, instead of trying (and failing) to reload a mod Penumbra no longer has any record of.");
+        DrawHelpMarker("Use this if you deleted this project's mod directly in Penumbra. Force-rebakes every stage and re-registers the mod from scratch, instead of trying (and failing) to reload a mod Penumbra no longer has any record of.");
 
         ImGui.SameLine();
         if (ImGui.Button("Create Trigger"))
@@ -637,8 +718,7 @@ public class ConfigWindow : Window, IDisposable
             forceSelectTriggersTab = true;
             configuration.Save();
         }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Creates a new trigger with one threshold per baked stage already pointing at this project's mod — you'll still need to set what fires it (emote/chat phrase/job skill) in the Triggers tab, which this switches to.");
+        DrawHelpMarker("Creates a new trigger with one threshold per baked stage already pointing at this project's mod — you'll still need to set what fires it (emote/chat phrase/job skill) in the Triggers tab, which this switches to.");
 
         if (isBusy)
         {
@@ -654,8 +734,7 @@ public class ConfigWindow : Window, IDisposable
             project.Priority = priority;
             configuration.Save();
         }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("This mod's priority against other enabled mods in Penumbra — decides which one wins when more than one redirects the same file (e.g. another mod also touching " + OverlayModWriter.RedirectGamePath + "). 0 is Penumbra's own default; higher wins. Applied every time this project is applied or its mod recreated.");
+        DrawHelpMarker("This mod's priority against other enabled mods in Penumbra — decides which one wins when more than one redirects the same file (e.g. another mod also touching " + OverlayModWriter.RedirectGamePath + "). 0 is Penumbra's own default; higher wins. Applied every time this project is applied or its mod recreated.");
 
         var penumbraFolder = project.PenumbraFolder;
         ImGui.SetNextItemWidth(200);
@@ -664,8 +743,7 @@ public class ConfigWindow : Window, IDisposable
             project.PenumbraFolder = penumbraFolder;
             configuration.Save();
         }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Files this mod under a folder in Penumbra's own mod list (e.g. \"Body\"), the same as typing a path in Penumbra's UI. Leave empty to leave the mod wherever Penumbra already has it. Applied every time this project is applied or its mod recreated.");
+        DrawHelpMarker("Files this mod under a folder in Penumbra's own mod list (e.g. \"Body\"), the same as typing a path in Penumbra's UI. Leave empty to leave the mod wherever Penumbra already has it. Applied every time this project is applied or its mod recreated.");
 
         ImGui.PopID();
     }
@@ -777,7 +855,24 @@ public class ConfigWindow : Window, IDisposable
             configuration.Save();
         }
 
+        const string tutorialLabel = "Tutorial";
+        var tutorialButtonWidth = ImGui.CalcTextSize(tutorialLabel).X + ImGui.GetStyle().FramePadding.X * 2f;
+        ImGui.SameLine(ImGui.GetContentRegionMax().X - tutorialButtonWidth);
+        if (ImGui.Button(tutorialLabel))
+        {
+            tutorialStepIndex = 0;
+            tutorialPopupShouldOpen = true;
+        }
+
         ImGui.Separator();
+
+        if (tutorialPopupShouldOpen)
+        {
+            ImGui.OpenPopup("Trigger Tutorial");
+            tutorialPopupShouldOpen = false;
+        }
+
+        DrawTutorialPopup("Trigger Tutorial", TutorialSteps, ref tutorialStepIndex);
 
         var listWidth = MathF.Max(180f, ImGui.GetContentRegionAvail().X * 0.3f);
 
@@ -794,6 +889,73 @@ public class ConfigWindow : Window, IDisposable
         else
             DrawTriggerDetail(selected);
         ImGui.EndChild();
+    }
+
+    /// <summary>One step of the trigger-building walkthrough: a title plus a static, illustrative body. Content
+    /// is hardcoded example text, never read from <see cref="Configuration.Triggers"/> or the currently
+    /// selected trigger, so the walkthrough stays read-only by construction (see design.md - Decisions).</summary>
+    private readonly record struct TutorialStep(string Title, string Body);
+
+    private static readonly TutorialStep[] TutorialSteps =
+    [
+        new TutorialStep(
+            "1. Source — what fires the trigger",
+            "Every trigger starts with a Source: what has to happen for it to fire.\n\n" +
+            "For example, an Emote source set to \"High Five\" with scope \"Others targeting me\" fires whenever " +
+            "someone else performs the High Five emote on you. A Chat phrase source instead watches for a bit of " +
+            "text in chat; a Job skill source watches for a specific action being cast.\n\n" +
+            "Only one source type is active per trigger — pick the one that matches what should set it off."),
+        new TutorialStep(
+            "2. Reaction — what happens when it fires",
+            "Once a trigger's Source matches, its Reactions decide what happens. You can combine any of: " +
+            "applying a Glamourer design, applying a Moodle, sending a chat message, and performing a gesture emote.\n\n" +
+            "For example, a trigger might apply a \"Blushing\" Glamourer design and a matching Moodle together — " +
+            "you don't have to pick just one, and a trigger with no reaction configured won't do anything."),
+        new TutorialStep(
+            "3. Timing — how long it lasts",
+            "If a trigger applies a Glamourer design, its Duration controls how long that design stays applied " +
+            "before automatically reverting — for example, 0h 5m 0s reverts five minutes after it fires.\n\n" +
+            "A Moodle instead expires on its own preset duration, set inside Moodles itself, not here.\n\n" +
+            "That's the whole path: Source decides when, Reaction decides what, Timing decides how long."),
+    ];
+
+    private static void DrawTutorialPopup(string popupId, TutorialStep[] steps, ref int stepIndex)
+    {
+        ImGui.SetNextWindowSize(new Vector2(520, 360), ImGuiCond.FirstUseEver);
+        var open = true;
+        if (!ImGui.BeginPopupModal(popupId, ref open))
+            return;
+
+        var step = steps[stepIndex];
+        ImGui.TextColored(new Vector4(0.75f, 0.6f, 0.85f, 1f), step.Title);
+        ImGui.Separator();
+        ImGui.Spacing();
+        ImGui.TextWrapped(step.Body);
+        ImGui.Spacing();
+
+        ImGui.Separator();
+
+        ImGui.BeginDisabled(stepIndex == 0);
+        if (ImGui.Button("Back"))
+            stepIndex = Math.Max(0, stepIndex - 1);
+        ImGui.EndDisabled();
+
+        ImGui.SameLine();
+        if (stepIndex < steps.Length - 1)
+        {
+            if (ImGui.Button("Next"))
+                stepIndex = Math.Min(steps.Length - 1, stepIndex + 1);
+        }
+        else
+        {
+            if (ImGui.Button("Done"))
+                ImGui.CloseCurrentPopup();
+        }
+
+        if (!open)
+            ImGui.CloseCurrentPopup();
+
+        ImGui.EndPopup();
     }
 
     private void DrawTriggerList()
@@ -867,8 +1029,7 @@ public class ConfigWindow : Window, IDisposable
             trigger.Name = name;
             configuration.Save();
         }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Shown in the list on the left. Leave blank to use a label generated from this trigger's source.");
+        DrawHelpMarker("Shown in the list on the left. Leave blank to use a label generated from this trigger's source.");
 
         DrawSectionHeader("Source");
         DrawSourceSection(trigger);
@@ -887,6 +1048,17 @@ public class ConfigWindow : Window, IDisposable
         ImGui.Spacing();
         ImGui.TextColored(new Vector4(0.75f, 0.6f, 0.85f, 1f), label);
         ImGui.Separator();
+    }
+
+    /// <summary>Draws a small muted "(?)" glyph right after the preceding widget, so a field's guidance is
+    /// discoverable without relying on the user incidentally hovering the field's own input widget — the same
+    /// idiom the "Penumbra reaction" label already uses via <see cref="ImGui.TextDisabled"/>.</summary>
+    private static void DrawHelpMarker(string tooltip)
+    {
+        ImGui.SameLine();
+        ImGui.TextDisabled("(?)");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(tooltip);
     }
 
     private void DrawSourceSection(ReactionTrigger trigger)
@@ -920,8 +1092,7 @@ public class ConfigWindow : Window, IDisposable
 
             ImGui.EndCombo();
         }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("What fires this trigger. Only the fields below for the selected type are used.");
+        DrawHelpMarker("What fires this trigger. Only the fields below for the selected type are used.");
 
         switch (trigger.TriggerSourceType)
         {
@@ -942,8 +1113,7 @@ public class ConfigWindow : Window, IDisposable
                     trigger.ChatPhrase = phrase;
                     configuration.Save();
                 }
-                if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip("Matched as a case-insensitive substring anywhere in a chat message — no fixed prefix or suffix required.");
+                DrawHelpMarker("Matched as a case-insensitive substring anywhere in a chat message — no fixed prefix or suffix required.");
 
                 var chatSourcePreview = trigger.ChatTriggerSource == ChatTriggerSource.SelfTyped
                     ? "Only when I type it"
@@ -964,8 +1134,7 @@ public class ConfigWindow : Window, IDisposable
 
                     ImGui.EndCombo();
                 }
-                if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip("Watches whichever chat channels are enabled in the Settings tab's Watched Chat Channels section.");
+                DrawHelpMarker("Watches whichever chat channels are enabled in the Settings tab's Watched Chat Channels section.");
                 break;
 
             case TriggerSourceType.JobSkill:
@@ -984,8 +1153,7 @@ public class ConfigWindow : Window, IDisposable
                         trigger.JobSkillActionId = newActionId;
                         configuration.Save();
                     }
-                    if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip("Only actions with a cast bar are detectable this way — instant weaponskills and abilities can't be used here.");
+                    DrawHelpMarker("Only actions with a cast bar are detectable this way — instant weaponskills and abilities can't be used here.");
                 }
 
                 DrawScopeCombo(trigger);
@@ -998,8 +1166,7 @@ public class ConfigWindow : Window, IDisposable
             trigger.CharacterNameFilter = characterNameFilter;
             configuration.Save();
         }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Optional — restricts this trigger to one specific character by name, on top of the scope/source setting above. Leave empty to match anyone that setting already allows. Has no effect when that setting is already self-only (\"Self performed\" / \"Only when I type it\"), since there's no other character to filter among.");
+        DrawHelpMarker("Optional — restricts this trigger to one specific character by name, on top of the scope/source setting above. Leave empty to match anyone that setting already allows. Has no effect when that setting is already self-only (\"Self performed\" / \"Only when I type it\"), since there's no other character to filter among.");
     }
 
     private void DrawScopeCombo(ReactionTrigger trigger)
@@ -1055,16 +1222,14 @@ public class ConfigWindow : Window, IDisposable
             trigger.ChatMessage = chatMessage;
             configuration.Save();
         }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Sent exactly as typed, e.g. \"/s hello!\" or \"/p party message\".\nA leading '/' runs it as a real command/channel switch, just like typing it yourself.");
+        DrawHelpMarker("Sent exactly as typed, e.g. \"/s hello!\" or \"/p party message\".\nA leading '/' runs it as a real command/channel switch, just like typing it yourself.");
 
         if (DrawSearchablePicker("Gesture", $"{trigger.Id}-gesture", gestureEmotes, trigger.GestureEmoteId, 0u, out var newGestureId))
         {
             trigger.GestureEmoteId = newGestureId;
             configuration.Save();
         }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Makes your character perform this emote once when the trigger fires. Fire-and-forget, like the chat message above — shares its send cooldown, and isn't reverted.");
+        DrawHelpMarker("Makes your character perform this emote once when the trigger fires. Fire-and-forget, like the chat message above — shares its send cooldown, and isn't reverted.");
 
         if (!string.IsNullOrWhiteSpace(trigger.ChatMessage) || trigger.GestureEmoteId != 0)
         {
@@ -1074,8 +1239,7 @@ public class ConfigWindow : Window, IDisposable
                 trigger.ChatCooldownSeconds = Math.Max(0, chatCooldown);
                 configuration.Save();
             }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Minimum time between sends for this trigger's chat message and gesture combined, so a repeated trigger can't spam the channel.");
+            DrawHelpMarker("Minimum time between sends for this trigger's chat message and gesture combined, so a repeated trigger can't spam the channel.");
         }
 
         DrawPenumbraStages(trigger);
@@ -1100,6 +1264,7 @@ public class ConfigWindow : Window, IDisposable
             var durationSeconds = totalSeconds % 60;
 
             ImGui.TextUnformatted("Duration");
+            DrawHelpMarker("How long the applied Glamourer design lasts before automatically reverting. Moodles expire on their own preset duration instead.");
             ImGui.SameLine();
             ImGui.SetNextItemWidth(50);
             var durationChanged = ImGui.InputInt("h##DurationHours", ref durationHours);
@@ -1115,8 +1280,6 @@ public class ConfigWindow : Window, IDisposable
                 trigger.Duration = new TimeSpan(0, Math.Max(0, durationHours), Math.Max(0, durationMinutes), Math.Max(0, durationSeconds));
                 configuration.Save();
             }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("How long the applied Glamourer design lasts before automatically reverting. Moodles expire on their own preset duration instead.");
 
             var revertModePreview = trigger.GlamourerRevertMode == GlamourerRevertMode.SpecificDesign
                 ? "Apply a specific design"
@@ -1137,8 +1300,7 @@ public class ConfigWindow : Window, IDisposable
 
                 ImGui.EndCombo();
             }
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("What Glamourer state this trigger reverts to when its timer expires. \"Force revert all\" always reverts to automation regardless of this setting.");
+            DrawHelpMarker("What Glamourer state this trigger reverts to when its timer expires. \"Force revert all\" always reverts to automation regardless of this setting.");
 
             if (trigger.GlamourerRevertMode == GlamourerRevertMode.SpecificDesign)
             {
@@ -1147,6 +1309,7 @@ public class ConfigWindow : Window, IDisposable
                     trigger.RevertToDesignId = newRevertDesignId;
                     configuration.Save();
                 }
+                DrawHelpMarker("The Glamourer design applied when this trigger's timer expires, instead of reverting to automation. Left unset (\"(None)\"), expiry falls back to reverting to automation anyway.");
             }
         }
 
@@ -1158,10 +1321,9 @@ public class ConfigWindow : Window, IDisposable
             configuration.Save();
         }
         ImGui.EndDisabled();
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(hasMoodle
-                ? "Never auto-revert this trigger's effects — set this by hand to match a Moodle you've configured with no expiration in Moodles. ReactToMe cannot read or sync this from Moodles automatically."
-                : "Select a Moodle to enable this — it's meant to mirror a Moodle you've set to never expire.");
+        DrawHelpMarker(hasMoodle
+            ? "Never auto-revert this trigger's effects — set this by hand to match a Moodle you've configured with no expiration in Moodles. ReactToMe cannot read or sync this from Moodles automatically."
+            : "Select a Moodle to enable this — it's meant to mirror a Moodle you've set to never expire.");
 
         var refreshOnRepeat = trigger.RefreshOnRepeat;
         if (ImGui.Checkbox("Refresh timer on repeat", ref refreshOnRepeat))
@@ -1169,6 +1331,7 @@ public class ConfigWindow : Window, IDisposable
             trigger.RefreshOnRepeat = refreshOnRepeat;
             configuration.Save();
         }
+        DrawHelpMarker("If this trigger fires again while its effect is still active, restart the duration timer from full instead of leaving it running on the original countdown.");
 
         ImGui.SameLine();
         var stackMultiple = trigger.StackMultiple;
@@ -1177,6 +1340,7 @@ public class ConfigWindow : Window, IDisposable
             trigger.StackMultiple = stackMultiple;
             configuration.Save();
         }
+        DrawHelpMarker("Allow more than one instance of this trigger's effect to be active at once, instead of the normal single-slot behavior where a repeat fire reverts and replaces whatever is currently active.");
     }
 
     /// <summary>Draws the Penumbra reaction section for a trigger: a None/Single/Staged mode choice that
@@ -1214,6 +1378,7 @@ public class ConfigWindow : Window, IDisposable
 
             ImGui.EndCombo();
         }
+        DrawHelpMarker("No mod reaction leaves Penumbra untouched. Single mod applies one mod/option on this trigger's first fire, with no escalation. Staged escalation switches between mods/options as this trigger repeats, based on fire count.");
 
         switch (trigger.PenumbraReactionMode)
         {
@@ -1301,6 +1466,7 @@ public class ConfigWindow : Window, IDisposable
                         stage.Threshold = Math.Clamp(threshold, 1, ActiveEffectRegistry.MaxPenumbraFireCount);
                         configuration.Save();
                     }
+                    DrawHelpMarker("This stage becomes active once the trigger has fired at least this many times since its effect was applied. If multiple stages qualify, the one with the highest threshold not exceeding the current fire count wins. Capped at 20 — FFXIV's own debuff stack limit.");
 
                     DrawPenumbraModFields(trigger, stage, $"penumbra-stage-{s}");
 
@@ -1356,6 +1522,7 @@ public class ConfigWindow : Window, IDisposable
             stage.OptionName = string.Empty;
             configuration.Save();
         }
+        DrawHelpMarker("The Penumbra mod this stage enables when it becomes active. Disabled again when this trigger's timer expires, or when a later stage switches to a different mod.");
 
         if (stage.ModDirectory.Length == 0)
             return;
@@ -1394,6 +1561,7 @@ public class ConfigWindow : Window, IDisposable
 
                 ImGui.EndCombo();
             }
+            DrawHelpMarker("This mod has more than one option group — pick which one this stage configures.");
         }
 
         if (stage.OptionGroupName.Length > 0 && groupSettings.TryGetValue(stage.OptionGroupName, out var groupInfo))
@@ -1412,6 +1580,7 @@ public class ConfigWindow : Window, IDisposable
 
                 ImGui.EndCombo();
             }
+            DrawHelpMarker("Which option within the selected group this stage enables.");
         }
     }
 
