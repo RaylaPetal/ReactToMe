@@ -5,6 +5,7 @@ using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.Text;
 using Dalamud.Interface.Textures;
 using Dalamud.Interface.Textures.TextureWraps;
 using Dalamud.Interface.Windowing;
@@ -40,6 +41,7 @@ public class ConfigWindow : Window, IDisposable
 
     private Guid? selectedTriggerId;
     private bool forceSelectTriggersTab;
+    private Guid? pendingRemoveTriggerId;
     private string triggerListFilter = string.Empty;
 
     private Guid? selectedOverlayProjectId;
@@ -172,7 +174,7 @@ public class ConfigWindow : Window, IDisposable
             var trigger = configuration.Triggers.FirstOrDefault(t => t.Id == effect.TriggerId);
             var label = trigger != null ? GetTriggerLabel(trigger) : "(unknown trigger)";
             var status = effect.ExpiresAtUtc is { } expiresAt
-                ? $"reverts in {Math.Max(0, (expiresAt - now).TotalSeconds):0}s"
+                ? $"reverts in {FormatRemaining(expiresAt - now)}"
                 : "no expiration";
             ImGui.TextUnformatted($"{label} — {status}");
         }
@@ -182,9 +184,50 @@ public class ConfigWindow : Window, IDisposable
             plugin.EffectRegistry.RevertAll();
     }
 
+    private static string FormatRemaining(TimeSpan remaining)
+    {
+        if (remaining <= TimeSpan.Zero)
+            return "0s";
+
+        var days = remaining.Days;
+        var hours = remaining.Hours;
+        var minutes = remaining.Minutes;
+        var seconds = remaining.Seconds;
+
+        var parts = new List<string>();
+        if (days > 0)
+            parts.Add($"{days}d");
+        if (days > 0 || hours > 0)
+            parts.Add($"{hours}h");
+        if (days > 0 || hours > 0 || minutes > 0)
+            parts.Add($"{minutes}m");
+        parts.Add($"{seconds}s");
+
+        return string.Join(" ", parts);
+    }
+
+    /// <summary>Individual channel types offered as their own checkbox, plus one entry per grouped channel
+    /// family (all 8 Linkshells, all 8 Cross-world Linkshells) toggled as a unit — a user wants "watch my
+    /// linkshells" as one concept, not to pick individually among LS1-8, so exposing all 16 numbered
+    /// channels as separate checkboxes would only add clutter without adding real choice.</summary>
+    private static readonly (string Label, XivChatType[] Channels)[] ChatChannelOptions =
+    [
+        ("Say", [XivChatType.Say]),
+        ("Yell", [XivChatType.Yell]),
+        ("Shout", [XivChatType.Shout]),
+        ("Tell", [XivChatType.TellIncoming, XivChatType.TellOutgoing]),
+        ("Party", [XivChatType.Party]),
+        ("Alliance", [XivChatType.Alliance]),
+        ("Free Company", [XivChatType.FreeCompany]),
+        ("Linkshells", [XivChatType.Ls1, XivChatType.Ls2, XivChatType.Ls3, XivChatType.Ls4, XivChatType.Ls5, XivChatType.Ls6, XivChatType.Ls7, XivChatType.Ls8]),
+        ("Cross-world Linkshells", [XivChatType.CrossLinkShell1, XivChatType.CrossLinkShell2, XivChatType.CrossLinkShell3, XivChatType.CrossLinkShell4, XivChatType.CrossLinkShell5, XivChatType.CrossLinkShell6, XivChatType.CrossLinkShell7, XivChatType.CrossLinkShell8]),
+        ("Novice Network", [XivChatType.NoviceNetwork]),
+    ];
+
     private void DrawSettingsTab()
     {
         ImGui.Spacing();
+        ImGui.TextDisabled("General");
 
         var movable = configuration.IsConfigWindowMovable;
         if (ImGui.Checkbox("Movable Config Window", ref movable))
@@ -197,6 +240,70 @@ public class ConfigWindow : Window, IDisposable
         if (ImGui.Checkbox("Revert active effect on logout", ref revertOnRelog))
         {
             configuration.RevertOnRelog = revertOnRelog;
+            configuration.Save();
+        }
+
+        var reactionsEnabled = configuration.ReactionsEnabled;
+        if (ImGui.Checkbox("Reactions enabled", ref reactionsEnabled))
+        {
+            configuration.ReactionsEnabled = reactionsEnabled;
+            configuration.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Master switch for every trigger at once. Turning this off stops all trigger matching — a fast way to go quiet for a call or stream — without changing any individual trigger's own enabled state; turning it back on restores matching exactly as each trigger was already configured. Already-active effects from before this was turned off are unaffected.");
+
+        ImGui.Separator();
+        ImGui.TextDisabled("Watched Chat Channels");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Which chat channels are watched for chat-phrase triggers. Say/Yell/Shout/Tell/Party/Alliance/Free Company are watched by default, matching this plugin's prior fixed behavior.");
+
+        const int columns = 3;
+        const float columnWidth = 170f;
+        for (var i = 0; i < ChatChannelOptions.Length; i++)
+        {
+            var (label, channels) = ChatChannelOptions[i];
+
+            // Three per row keeps the section compact without risking horizontal overflow from packing
+            // all ten options onto one line.
+            var column = i % columns;
+            if (column != 0)
+                ImGui.SameLine(column * columnWidth);
+
+            var allWatched = channels.All(configuration.WatchedChatChannels.Contains);
+            if (ImGui.Checkbox(label, ref allWatched))
+            {
+                if (allWatched)
+                    foreach (var channel in channels)
+                    {
+                        if (!configuration.WatchedChatChannels.Contains(channel))
+                            configuration.WatchedChatChannels.Add(channel);
+                    }
+                else
+                    configuration.WatchedChatChannels.RemoveAll(channels.Contains);
+
+                configuration.Save();
+            }
+        }
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.TextDisabled("New Trigger Defaults");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Seed values a newly-created trigger starts with. Changing these never alters any already-existing trigger's own configured values.");
+
+        var defaultDurationMinutes = (float)configuration.DefaultTriggerDuration.TotalMinutes;
+        ImGui.SetNextItemWidth(120);
+        if (ImGui.InputFloat("Default duration (minutes)", ref defaultDurationMinutes))
+        {
+            configuration.DefaultTriggerDuration = TimeSpan.FromMinutes(Math.Max(0, defaultDurationMinutes));
+            configuration.Save();
+        }
+
+        var defaultChatCooldown = configuration.DefaultChatCooldownSeconds;
+        ImGui.SetNextItemWidth(120);
+        if (ImGui.InputInt("Default chat cooldown (seconds)", ref defaultChatCooldown))
+        {
+            configuration.DefaultChatCooldownSeconds = Math.Max(0, defaultChatCooldown);
             configuration.Save();
         }
     }
@@ -660,7 +767,11 @@ public class ConfigWindow : Window, IDisposable
         ImGui.SameLine();
         if (ImGui.Button("Add Trigger"))
         {
-            var newTrigger = new ReactionTrigger();
+            var newTrigger = new ReactionTrigger
+            {
+                Duration = configuration.DefaultTriggerDuration,
+                ChatCooldownSeconds = configuration.DefaultChatCooldownSeconds,
+            };
             configuration.Triggers.Add(newTrigger);
             selectedTriggerId = newTrigger.Id;
             configuration.Save();
@@ -720,14 +831,35 @@ public class ConfigWindow : Window, IDisposable
         }
 
         ImGui.SameLine();
-        if (ImGui.Button("Remove Trigger"))
+        if (pendingRemoveTriggerId == trigger.Id)
         {
-            configuration.Triggers.Remove(trigger);
-            selectedTriggerId = null;
-            configuration.Save();
-            ImGui.PopID();
-            return;
+            if (ImGui.Button("Confirm Remove"))
+            {
+                configuration.Triggers.Remove(trigger);
+                selectedTriggerId = null;
+                pendingRemoveTriggerId = null;
+                configuration.Save();
+                ImGui.PopID();
+                return;
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel##cancelRemoveTrigger"))
+                pendingRemoveTriggerId = null;
         }
+        else
+        {
+            if (ImGui.Button("Remove Trigger"))
+                pendingRemoveTriggerId = trigger.Id;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Deleting a trigger can't be undone — requires confirming.");
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Test Fire"))
+            plugin.TestFireTrigger(trigger);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Applies this trigger's configured reactions immediately, exactly as a real matching emote/chat phrase/job skill would — without waiting for that to actually happen. Subject to the same chat/gesture cooldown a real repeat fire would be.");
 
         var name = trigger.Name;
         if (ImGui.InputText("Display name", ref name, 64))
@@ -833,7 +965,7 @@ public class ConfigWindow : Window, IDisposable
                     ImGui.EndCombo();
                 }
                 if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip("Watches Say, Yell, Shout, Tell, Party, Alliance, and Free Company chat only.");
+                    ImGui.SetTooltip("Watches whichever chat channels are enabled in the Settings tab's Watched Chat Channels section.");
                 break;
 
             case TriggerSourceType.JobSkill:
@@ -859,6 +991,15 @@ public class ConfigWindow : Window, IDisposable
                 DrawScopeCombo(trigger);
                 break;
         }
+
+        var characterNameFilter = trigger.CharacterNameFilter;
+        if (ImGui.InputText("Character name filter", ref characterNameFilter, 64))
+        {
+            trigger.CharacterNameFilter = characterNameFilter;
+            configuration.Save();
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Optional — restricts this trigger to one specific character by name, on top of the scope/source setting above. Leave empty to match anyone that setting already allows. Has no effect when that setting is already self-only (\"Self performed\" / \"Only when I type it\"), since there's no other character to filter among.");
     }
 
     private void DrawScopeCombo(ReactionTrigger trigger)
@@ -953,10 +1094,25 @@ public class ConfigWindow : Window, IDisposable
 
         if (!trigger.NoExpiration)
         {
-            var durationMinutes = (float)trigger.Duration.TotalMinutes;
-            if (ImGui.InputFloat("Duration (minutes)", ref durationMinutes))
+            var totalSeconds = (int)trigger.Duration.TotalSeconds;
+            var durationHours = totalSeconds / 3600;
+            var durationMinutes = totalSeconds % 3600 / 60;
+            var durationSeconds = totalSeconds % 60;
+
+            ImGui.TextUnformatted("Duration");
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(50);
+            var durationChanged = ImGui.InputInt("h##DurationHours", ref durationHours);
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(50);
+            durationChanged |= ImGui.InputInt("m##DurationMinutes", ref durationMinutes);
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(50);
+            durationChanged |= ImGui.InputInt("s##DurationSeconds", ref durationSeconds);
+
+            if (durationChanged)
             {
-                trigger.Duration = TimeSpan.FromMinutes(Math.Max(0, durationMinutes));
+                trigger.Duration = new TimeSpan(0, Math.Max(0, durationHours), Math.Max(0, durationMinutes), Math.Max(0, durationSeconds));
                 configuration.Save();
             }
             if (ImGui.IsItemHovered())

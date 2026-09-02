@@ -99,6 +99,14 @@ public class ReactionTrigger
     /// <summary>Who must have said <see cref="ChatPhrase"/> for this trigger to fire.</summary>
     public ChatTriggerSource ChatTriggerSource { get; set; } = ChatTriggerSource.AnyoneNearby;
 
+    /// <summary>Optional case-insensitive character-name filter applied on top of <see cref="Scope"/> (for
+    /// <see cref="Triggers.TriggerSourceType.Emote"/>/<see cref="Triggers.TriggerSourceType.JobSkill"/>) or
+    /// <see cref="ChatTriggerSource"/> (for <see cref="Triggers.TriggerSourceType.ChatPhrase"/>) — restricts
+    /// matching to one specific character by name. Has no effect when the existing scope/source setting
+    /// already restricts matching to only the local player, since there is no other character to filter
+    /// among in that case. Empty (the default) matches exactly as if this field didn't exist.</summary>
+    public string CharacterNameFilter { get; set; } = string.Empty;
+
     /// <summary>Lumina ClassJob sheet RowId of the job the skill picker below is narrowed to. UI
     /// convenience only — matching is done purely on <see cref="JobSkillActionId"/>, not this.</summary>
     public uint JobSkillClassJobId { get; set; } = 0;

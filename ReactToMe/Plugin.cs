@@ -75,7 +75,7 @@ public sealed class Plugin : IDalamudPlugin
         jobSkillPoller = new JobSkillPoller(ObjectTable, Log);
         jobSkillPoller.JobSkillCast += OnJobSkillCast;
 
-        chatMessageListener = new ChatMessageListener(ChatGui, ObjectTable);
+        chatMessageListener = new ChatMessageListener(ChatGui, ObjectTable, Configuration);
         chatMessageListener.MessageReceived += OnChatMessageReceived;
 
         ConfigWindow = new ConfigWindow(this);
@@ -123,32 +123,47 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnEmotePerformed(object? sender, EmotePerformedEventArgs e)
     {
+        if (!Configuration.ReactionsEnabled)
+            return;
+
         var localPlayerId = ObjectTable.LocalPlayer?.GameObjectId;
         var sourceIsLocalPlayer = e.SourceGameObjectId == localPlayerId;
         var targetIsLocalPlayer = localPlayerId != null && e.TargetGameObjectId == localPlayerId;
 
-        var trigger = TriggerMatcher.FindEmoteMatch(Configuration.Triggers, e.EmoteId, sourceIsLocalPlayer, targetIsLocalPlayer);
+        var trigger = TriggerMatcher.FindEmoteMatch(Configuration.Triggers, e.EmoteId, sourceIsLocalPlayer, targetIsLocalPlayer, e.SourceName);
         if (trigger != null)
             FireReactions(trigger);
     }
 
     private void OnJobSkillCast(object? sender, JobSkillCastEventArgs e)
     {
+        if (!Configuration.ReactionsEnabled)
+            return;
+
         var localPlayerId = ObjectTable.LocalPlayer?.GameObjectId;
         var sourceIsLocalPlayer = e.SourceGameObjectId == localPlayerId;
         var targetIsLocalPlayer = localPlayerId != null && e.TargetGameObjectId == localPlayerId;
 
-        var trigger = TriggerMatcher.FindJobSkillMatch(Configuration.Triggers, e.ActionId, sourceIsLocalPlayer, targetIsLocalPlayer);
+        var trigger = TriggerMatcher.FindJobSkillMatch(Configuration.Triggers, e.ActionId, sourceIsLocalPlayer, targetIsLocalPlayer, e.SourceName);
         if (trigger != null)
             FireReactions(trigger);
     }
 
     private void OnChatMessageReceived(object? sender, ChatMessageReceivedEventArgs e)
     {
-        var trigger = TriggerMatcher.FindChatPhraseMatch(Configuration.Triggers, e.Message, e.SenderIsLocalPlayer);
+        if (!Configuration.ReactionsEnabled)
+            return;
+
+        var trigger = TriggerMatcher.FindChatPhraseMatch(Configuration.Triggers, e.Message, e.SenderIsLocalPlayer, e.SenderName);
         if (trigger != null)
             FireReactions(trigger);
     }
+
+    /// <summary>Fires a trigger's reactions on demand from the config UI's "Test Fire" button, exactly as a
+    /// real matched emote/chat-phrase/job-skill event would — the same <see cref="FireReactions"/> call, so
+    /// there is no separate "preview" code path to keep in sync with the real one. Naturally subject to the
+    /// same chat/gesture cooldown a real repeated fire would be, since both go through the same method.</summary>
+    public void TestFireTrigger(ReactionTrigger trigger) => FireReactions(trigger);
 
     private void FireReactions(ReactionTrigger trigger)
     {

@@ -11,6 +11,11 @@ public sealed class JobSkillCastEventArgs : EventArgs
     public required uint ActionId { get; init; }
     public required ulong SourceGameObjectId { get; init; }
     public required ulong TargetGameObjectId { get; init; }
+
+    /// <summary>The casting character's name, for <see cref="Triggers.ReactionTrigger.CharacterNameFilter"/>
+    /// matching. Null if the actor no longer resolves by the time this is read (rare — it was just polled
+    /// this same frame).</summary>
+    public string? SourceName { get; init; }
 }
 
 /// <summary>
@@ -70,6 +75,7 @@ public sealed class JobSkillPoller
                 ActionId = actionId,
                 SourceGameObjectId = actorId,
                 TargetGameObjectId = targetId,
+                SourceName = playerCharacter.Name.TextValue,
             });
         }
     }

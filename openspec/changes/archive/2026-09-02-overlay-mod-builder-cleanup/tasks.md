@@ -28,7 +28,7 @@
 
 - [x] 5.1 Add `PenumbraFolder` (string, default empty) to `OverlayModBuilderProject`.
 - [x] 5.2 In the shared apply path (`OverlayModBuilderService`'s private `ApplyProjectAsync`), after a successful `AddGeneratedMod`/`ReloadGeneratedMod`, call `penumbraIpc.SetModPath` with `$"{project.PenumbraFolder}/{project.DisplayName}"` when `project.PenumbraFolder.Length > 0` — mirroring the existing `project.Priority != 0` guard already used for `SetModPriority`.
-- [ ] 5.3 **STOP for live confirmation**: apply a project with a folder set (e.g. "Body"), confirm in Penumbra's own UI that the mod is actually filed under that folder with the expected display name. Do not consider this task done without this check, since `SetModPath`'s exact expected path format was inferred from its doc comment, not verified live.
+- [x] 5.3 **STOP for live confirmation**: apply a project with a folder set (e.g. "Body"), confirm in Penumbra's own UI that the mod is actually filed under that folder with the expected display name. Do not consider this task done without this check, since `SetModPath`'s exact expected path format was inferred from its doc comment, not verified live. Confirmed by the user.
 - [x] 5.4 Add a "Penumbra folder" text field to `ConfigWindow`'s project detail panel, bound to `project.PenumbraFolder`.
 - [x] 5.5 Build and confirm 0 warnings/0 errors.
 
@@ -41,4 +41,4 @@
 
 ## 7. End-to-end verification
 
-- [ ] 7.1 Manually verify the full scenario set in `specs/overlay-mod-builder/spec.md`'s added requirements: removing a baked stage deletes its files and a newly-added stage shows no stale preview; removing a middle stage doesn't disturb the stages after it; removing an applied project requires confirmation and then deletes the mod from Penumbra's own list; removing a never-applied project needs no confirmation; a configured Penumbra folder actually files the mod there on apply; generating a trigger from a project with baked stages produces the expected thresholds and lands on the Triggers tab with it selected.
+- [x] 7.1 Manually verify the full scenario set in `specs/overlay-mod-builder/spec.md`'s added requirements: removing a baked stage deletes its files and a newly-added stage shows no stale preview; removing a middle stage doesn't disturb the stages after it; removing an applied project requires confirmation and then deletes the mod from Penumbra's own list; removing a never-applied project needs no confirmation; a configured Penumbra folder actually files the mod there on apply; generating a trigger from a project with baked stages produces the expected thresholds and lands on the Triggers tab with it selected. Confirmed by the user.
