@@ -1,12 +1,16 @@
-name: PR Builder for ReactToMe
+name: Release
 
 on:
-  pull_request:
-    branches: [ master ]
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
 
 jobs:
 
-  build:
+  release:
     runs-on: windows-2022
 
     steps:
@@ -26,11 +30,11 @@ jobs:
     - name: Build with dotnet
       run: dotnet build ReactToMe/ReactToMe.csproj --configuration Release -p:Platform=x64
 
-    - name: Store artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: ReactToMe
-        path: .\ReactToMe\bin\x64\Release\*
-        if-no-files-found: error
-        retention-days: 7
+    - name: Zip plugin
+      run: Compress-Archive -Path .\ReactToMe\bin\x64\Release\* -DestinationPath .\ReactToMe.zip
 
+    - name: Create GitHub release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ReactToMe.zip
+        generate_release_notes: true

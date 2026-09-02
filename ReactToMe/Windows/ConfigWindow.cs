@@ -50,7 +50,12 @@ public class ConfigWindow : Window, IDisposable
 
     private Guid? selectedOverlayProjectId;
 
-    public ConfigWindow(Plugin plugin) : base("ReactToMe Configuration###ReactToMe config window")
+    /// <summary>The part before "###" is what's displayed; the part after is ImGui's stable window ID, which
+    /// must not change when the version does.</summary>
+    private static string BuildWindowTitle() =>
+        $"ReactToMe Configuration - v{Plugin.PluginInterface.Manifest.AssemblyVersion}###ReactToMe config window";
+
+    public ConfigWindow(Plugin plugin) : base(BuildWindowTitle())
     {
         Flags = ImGuiWindowFlags.NoCollapse;
 
