@@ -9,3 +9,4 @@ bin/
 .claude/commands/
 .claude/skills/
 .agents/
+openspec/
