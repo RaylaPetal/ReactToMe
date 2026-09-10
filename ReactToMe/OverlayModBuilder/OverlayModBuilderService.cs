@@ -78,6 +78,14 @@ public sealed class OverlayModBuilderService
         }
     }
 
+    /// <summary>Resolves which stage a non-baseline stage at <paramref name="stageIndex"/> bakes its base
+    /// image from: the immediately preceding stage under <see cref="OverlayModBuilderBakeMode.Chained"/>, or
+    /// always Stage 0 under <see cref="OverlayModBuilderBakeMode.FromBaseline"/>. Not meaningful for
+    /// <paramref name="stageIndex"/> 0 itself (the baseline stage), which bakes from the pristine snapshot
+    /// directly regardless of bake mode — callers must not invoke this for that index.</summary>
+    public static int GetBaseStageIndex(OverlayModBuilderProject project, int stageIndex) =>
+        project.BakeMode == OverlayModBuilderBakeMode.FromBaseline ? 0 : stageIndex - 1;
+
     private static string GetSnapshotPath(Guid projectId) =>
         Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "OverlayModBuilderSnapshots", $"{projectId:N}.png");
 
@@ -172,10 +180,11 @@ public sealed class OverlayModBuilderService
             }
             else
             {
-                baseImagePath = GetStagePreviewFilePath(modFolder, project.Stages[stageIndex - 1].Id);
+                var baseStage = project.Stages[GetBaseStageIndex(project, stageIndex)];
+                baseImagePath = GetStagePreviewFilePath(modFolder, baseStage.Id);
                 if (!File.Exists(baseImagePath))
                 {
-                    chatGui.PrintError($"[ReactToMe] Overlay mod builder: stage \"{stage.Name}\" needs the previous stage baked first — missing {baseImagePath}.");
+                    chatGui.PrintError($"[ReactToMe] Overlay mod builder: stage \"{stage.Name}\" needs \"{baseStage.Name}\" baked first — missing {baseImagePath}.");
                     return false;
                 }
             }
@@ -219,8 +228,9 @@ public sealed class OverlayModBuilderService
 
             stage.LastBakedOverlayImagePath = stage.OverlayImagePath;
             stage.LastBakedSnapshotVersion = project.SnapshotVersion;
+            stage.LastBakedModeVersion = project.ModeVersion;
             stage.LastBakedFileSchemeVersion = OverlayModWriter.StageFileSchemeVersion;
-            stage.LastBakedPredecessorVersion = stageIndex > 0 ? project.Stages[stageIndex - 1].BakeVersion : -1;
+            stage.LastBakedPredecessorVersion = stageIndex > 0 ? project.Stages[GetBaseStageIndex(project, stageIndex)].BakeVersion : -1;
             stage.BakeVersion++;
             return true;
         }
@@ -312,8 +322,8 @@ public sealed class OverlayModBuilderService
             if (!stage.IsBaseline && stage.OverlayImagePath.Length == 0)
                 continue;
 
-            int? predecessorBakeVersion = i > 0 ? project.Stages[i - 1].BakeVersion : null;
-            var needsRebake = forceRebakeAll || stage.NeedsRebake(project.SnapshotVersion, predecessorBakeVersion);
+            int? baseStageBakeVersion = i > 0 ? project.Stages[GetBaseStageIndex(project, i)].BakeVersion : null;
+            var needsRebake = forceRebakeAll || stage.NeedsRebake(project.SnapshotVersion, project.ModeVersion, baseStageBakeVersion);
             if (needsRebake)
                 await BakeStageAsync(project, stage);
         }

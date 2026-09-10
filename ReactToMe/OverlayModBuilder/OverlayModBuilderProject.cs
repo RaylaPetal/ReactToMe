@@ -41,6 +41,13 @@ public class OverlayModBuilderStage
 
     public int LastBakedSnapshotVersion { get; set; } = -1;
 
+    /// <summary>The project's <see cref="OverlayModBuilderProject.ModeVersion"/> in effect during this
+    /// stage's last successful bake. Not applicable to the baseline stage, since bake mode only changes
+    /// which stage a non-baseline stage's bake reads from. Lets a stage detect that the project's bake mode
+    /// has changed since it last baked, the same way <see cref="LastBakedSnapshotVersion"/> detects a
+    /// recaptured snapshot.</summary>
+    public int LastBakedModeVersion { get; set; } = -1;
+
     /// <summary>The <see cref="OverlayModWriter.StageFileSchemeVersion"/> in effect during this stage's last
     /// successful bake. A code-level change to where/how stage files are laid out on disk invalidates every
     /// already-baked stage the same way a changed overlay image or recaptured snapshot would, but neither of
@@ -48,22 +55,25 @@ public class OverlayModBuilderStage
     /// forces a re-bake automatically instead of silently leaving stages pointing at a stale location.</summary>
     public int LastBakedFileSchemeVersion { get; set; } = -1;
 
-    /// <summary>Incremented every time this stage successfully bakes — lets the *next* stage in the chain
-    /// detect that its own base (this stage's baked output) has changed, via
-    /// <see cref="LastBakedPredecessorVersion"/>.</summary>
+    /// <summary>Incremented every time this stage successfully bakes — lets whichever stage's bake reads
+    /// from this one (the next stage in the chain under <see cref="OverlayModBuilderBakeMode.Chained"/>, or
+    /// every non-baseline stage under <see cref="OverlayModBuilderBakeMode.FromBaseline"/> when this is the
+    /// baseline) detect that its own base has changed, via <see cref="LastBakedPredecessorVersion"/>.</summary>
     public int BakeVersion { get; set; }
 
-    /// <summary>The immediately preceding stage's <see cref="BakeVersion"/> at the time this stage last
-    /// baked. Not applicable to the baseline stage (it has no predecessor — it bakes from the pristine
-    /// snapshot directly). A mismatch against the predecessor's current <see cref="BakeVersion"/> means the
-    /// predecessor rebaked since, so this stage's own chained output is now stale too.</summary>
+    /// <summary>The base stage's (see <c>OverlayModBuilderService.GetBaseStageIndex</c> — the immediately
+    /// preceding stage under <see cref="OverlayModBuilderBakeMode.Chained"/>, or Stage 0 under
+    /// <see cref="OverlayModBuilderBakeMode.FromBaseline"/>) <see cref="BakeVersion"/> at the time this
+    /// stage last baked. Not applicable to the baseline stage (it has no base stage of its own — it bakes
+    /// from the pristine snapshot directly). A mismatch against that base stage's current
+    /// <see cref="BakeVersion"/> means it rebaked since, so this stage's own output is now stale too.</summary>
     public int LastBakedPredecessorVersion { get; set; } = -1;
 
     /// <summary>Whether this stage needs (re-)baking: never successfully baked, its source image has
     /// changed since its last successful bake, the project's pristine snapshot has been recaptured since
-    /// then, the on-disk file scheme itself has changed since then, or (for a non-baseline stage) the
-    /// immediately preceding stage in the chain has rebaked since this stage last did.</summary>
-    public bool NeedsRebake(int currentSnapshotVersion, int? predecessorBakeVersion)
+    /// then, the project's bake mode has changed since then, the on-disk file scheme itself has changed
+    /// since then, or (for a non-baseline stage) its base stage has rebaked since this stage last did.</summary>
+    public bool NeedsRebake(int currentSnapshotVersion, int currentModeVersion, int? baseStageBakeVersion)
     {
         if (!IsBaseline && (string.IsNullOrEmpty(LastBakedOverlayImagePath) || LastBakedOverlayImagePath != OverlayImagePath))
             return true;
@@ -71,11 +81,27 @@ public class OverlayModBuilderStage
         if (LastBakedSnapshotVersion != currentSnapshotVersion)
             return true;
 
+        if (!IsBaseline && LastBakedModeVersion != currentModeVersion)
+            return true;
+
         if (LastBakedFileSchemeVersion != OverlayModWriter.StageFileSchemeVersion)
             return true;
 
-        return predecessorBakeVersion.HasValue && LastBakedPredecessorVersion != predecessorBakeVersion.Value;
+        return baseStageBakeVersion.HasValue && LastBakedPredecessorVersion != baseStageBakeVersion.Value;
     }
+}
+
+/// <summary>How a non-baseline stage's bake picks its base image. <see cref="Chained"/> is the original,
+/// zero-value default so projects saved before this field existed deserialize into unchanged behavior —
+/// see <see cref="OverlayModBuilderProject.BakeMode"/>.</summary>
+public enum OverlayModBuilderBakeMode
+{
+    /// <summary>Every stage composites on top of the immediately preceding stage's own baked output.</summary>
+    Chained = 0,
+
+    /// <summary>Every stage composites directly on top of Stage 0's (the baseline's) own baked output,
+    /// regardless of its position in the stage list.</summary>
+    FromBaseline,
 }
 
 /// <summary>
@@ -119,7 +145,33 @@ public class OverlayModBuilderProject
     /// change (recapturing overwrites the same file in place).</summary>
     public int SnapshotVersion { get; set; }
 
-    /// <summary>Whether this project's mod has been registered with Penumbra at least once — determines
+    /// <summary>How this project's non-baseline stages pick their base image — see
+    /// <see cref="OverlayModBuilderBakeMode"/>. <see cref="OverlayModBuilderBakeMode.Chained"/> is the
+    /// zero-value default specifically so projects saved before this field existed deserialize into their
+    /// original (chained) behavior unchanged. Changed only via <see cref="SetBakeMode"/>, never assigned
+    /// directly, so <see cref="ModeVersion"/> always reflects every actual change.</summary>
+    public OverlayModBuilderBakeMode BakeMode { get; set; } = OverlayModBuilderBakeMode.Chained;
+
+    /// <summary>Incremented every time <see cref="BakeMode"/> actually changes (via <see cref="SetBakeMode"/>),
+    /// so an already-baked non-baseline stage can tell its baked output was produced under a since-changed
+    /// mode even though nothing else about it changed — mirrors <see cref="SnapshotVersion"/>'s role for
+    /// snapshot recapture.</summary>
+    public int ModeVersion { get; set; }
+
+    /// <summary>Sets <see cref="BakeMode"/> and bumps <see cref="ModeVersion"/> if it actually changed. The
+    /// only supported way to change bake mode — assigning <see cref="BakeMode"/> directly (as JSON
+    /// deserialization does when loading a saved project) intentionally leaves <see cref="ModeVersion"/>
+    /// alone, since that's not a user-initiated mode change.</summary>
+    public void SetBakeMode(OverlayModBuilderBakeMode mode)
+    {
+        if (BakeMode == mode)
+            return;
+
+        BakeMode = mode;
+        ModeVersion++;
+    }
+
+    /// <summary>Whether this project has been applied at least once — determines
     /// whether the next apply calls <c>AddMod</c> (first time) or <c>ReloadMod</c> (every time after).</summary>
     public bool IsApplied { get; set; }
 
