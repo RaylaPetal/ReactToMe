@@ -37,6 +37,7 @@ public class ConfigWindow : Window, IDisposable
     private bool listsLoaded;
     private readonly HashSet<Guid> busyOverlayProjectIds = new();
     private Guid? pendingRemoveOverlayProjectId;
+    private readonly Dictionary<Guid, OverlayModBuilderBakeMode> pendingBakeModeChange = new();
     private readonly Dictionary<string, (DateTime LastWriteUtc, IDalamudTextureWrap Wrap)> overlayPreviewWraps = new();
 
     private Guid? selectedTriggerId;
@@ -581,6 +582,40 @@ public class ConfigWindow : Window, IDisposable
         }
         DrawHelpMarker("The base texture stages build on top of. Picked from the list above (\"Base texture (read from)\") — searching narrows it, e.g. \"kaede\" or \"body\".");
 
+        if (pendingBakeModeChange.TryGetValue(project.Id, out var pendingMode))
+        {
+            ImGui.TextColored(new Vector4(1f, 0.6f, 0.2f, 1f), "This project has already-baked stages — changing bake mode marks all of them as needing a rebake.");
+            if (ImGui.Button("Confirm Bake Mode Change"))
+            {
+                project.SetBakeMode(pendingMode);
+                pendingBakeModeChange.Remove(project.Id);
+                configuration.Save();
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel##cancelBakeModeChange"))
+                pendingBakeModeChange.Remove(project.Id);
+        }
+        else
+        {
+            var bakeModeIndex = project.BakeMode == OverlayModBuilderBakeMode.FromBaseline ? 1 : 0;
+            ImGui.SetNextItemWidth(220);
+            if (ImGui.Combo("Bake mode", ref bakeModeIndex, "Chained\0From baseline\0"))
+            {
+                var newMode = bakeModeIndex == 1 ? OverlayModBuilderBakeMode.FromBaseline : OverlayModBuilderBakeMode.Chained;
+                var hasBakedNonBaselineStage = project.Stages.Any(s => !s.IsBaseline && s.LastBakedOverlayImagePath.Length > 0);
+                if (hasBakedNonBaselineStage)
+                {
+                    pendingBakeModeChange[project.Id] = newMode;
+                }
+                else
+                {
+                    project.SetBakeMode(newMode);
+                    configuration.Save();
+                }
+            }
+            DrawHelpMarker("Chained: each stage bakes on top of the previous stage's own baked output. From baseline: every stage bakes directly on top of Stage 0, ignoring any other stage. Changing this marks every already-baked stage as needing a rebake.");
+        }
+
         if (project.TargetActualPath.Length == 0)
         {
             ImGui.PopID();
@@ -660,8 +695,8 @@ public class ConfigWindow : Window, IDisposable
                 ImGui.EndDisabled();
             }
 
-            var predecessorBakeVersion = s > 0 ? project.Stages[s - 1].BakeVersion : (int?)null;
-            if (stage.NeedsRebake(project.SnapshotVersion, predecessorBakeVersion))
+            var baseStageBakeVersion = s > 0 ? project.Stages[OverlayModBuilderService.GetBaseStageIndex(project, s)].BakeVersion : (int?)null;
+            if (stage.NeedsRebake(project.SnapshotVersion, project.ModeVersion, baseStageBakeVersion))
             {
                 ImGui.SameLine();
                 ImGui.TextColored(new Vector4(1f, 0.6f, 0.2f, 1f), "(needs rebake — will bake on next Apply)");
