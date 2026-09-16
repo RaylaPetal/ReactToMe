@@ -175,7 +175,11 @@ public sealed class Plugin : IDalamudPlugin
 
         // Chat message and gesture share one cooldown window (both go through the same chatbox
         // submission), so they're sent together under a single cooldown check.
-        var gestureCommand = trigger.GestureEmoteId != 0 ? EmoteCatalog.GetCommand(trigger.GestureEmoteId) : null;
+        var localPlayerId = ObjectTable.LocalPlayer?.GameObjectId;
+        var localPlayerBusy = localPlayerId != null && emotePoller.IsPerformingEmote(localPlayerId.Value);
+        var gestureCommand = trigger.GestureEmoteId != 0 && !localPlayerBusy
+            ? EmoteCatalog.GetCommand(trigger.GestureEmoteId)
+            : null;
         ChatMessageSender.Send(trigger.Id, trigger.ChatCooldownSeconds, trigger.ChatMessage, gestureCommand);
     }
 

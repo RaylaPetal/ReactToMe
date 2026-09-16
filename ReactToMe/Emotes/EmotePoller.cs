@@ -38,6 +38,11 @@ public sealed class EmotePoller
         this.log = log;
     }
 
+    /// <summary>Whether <paramref name="actorId"/> was mid-emote as of the last <see cref="Poll"/> —
+    /// used to suppress a gesture reaction that would otherwise interrupt an emote already in
+    /// progress (e.g. a manually-performed /hdance). Reflects at most one frame of staleness.</summary>
+    public bool IsPerformingEmote(ulong actorId) => lastEmoteByActor.TryGetValue(actorId, out var emoteId) && emoteId != 0;
+
     public unsafe void Poll()
     {
         foreach (var obj in objectTable)
