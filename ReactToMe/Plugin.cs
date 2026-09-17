@@ -165,7 +165,7 @@ public sealed class Plugin : IDalamudPlugin
     /// same chat/gesture cooldown a real repeated fire would be, since both go through the same method.</summary>
     public void TestFireTrigger(ReactionTrigger trigger) => FireReactions(trigger);
 
-    private void FireReactions(ReactionTrigger trigger)
+    private unsafe void FireReactions(ReactionTrigger trigger)
     {
         if (trigger.GlamourerDesignId != Guid.Empty || trigger.PenumbraStages.Count > 0)
             EffectRegistry.Apply(trigger);
@@ -175,8 +175,7 @@ public sealed class Plugin : IDalamudPlugin
 
         // Chat message and gesture share one cooldown window (both go through the same chatbox
         // submission), so they're sent together under a single cooldown check.
-        var localPlayerId = ObjectTable.LocalPlayer?.GameObjectId;
-        var localPlayerBusy = localPlayerId != null && emotePoller.IsPerformingEmote(localPlayerId.Value);
+        var localPlayerBusy = EmotePoller.IsInEmoteLoop(ObjectTable.LocalPlayer);
         var gestureCommand = trigger.GestureEmoteId != 0 && !localPlayerBusy
             ? EmoteCatalog.GetCommand(trigger.GestureEmoteId)
             : null;

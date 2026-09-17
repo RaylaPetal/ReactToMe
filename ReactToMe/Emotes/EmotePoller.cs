@@ -38,10 +38,24 @@ public sealed class EmotePoller
         this.log = log;
     }
 
-    /// <summary>Whether <paramref name="actorId"/> was mid-emote as of the last <see cref="Poll"/> —
-    /// used to suppress a gesture reaction that would otherwise interrupt an emote already in
-    /// progress (e.g. a manually-performed /hdance). Reflects at most one frame of staleness.</summary>
-    public bool IsPerformingEmote(ulong actorId) => lastEmoteByActor.TryGetValue(actorId, out var emoteId) && emoteId != 0;
+    /// <summary>Whether <paramref name="actor"/> is currently in a looping emote animation (a solo
+    /// dance-style loop, or a synced paired-emote position loop) — used to suppress a gesture
+    /// reaction that would otherwise interrupt an emote already in progress (e.g. a
+    /// manually-performed /hdance). Reads the native Character.Mode directly rather than
+    /// EmoteController.EmoteId: EmoteId marks the moment a *new* emote starts and doesn't reliably
+    /// track back to "not busy" once it ends, whereas Mode is a live state the game itself reverts
+    /// to Normal the instant the loop ends or is cancelled.</summary>
+    public static unsafe bool IsInEmoteLoop(IPlayerCharacter? actor)
+    {
+        if (actor == null)
+            return false;
+
+        var native = (Character*)actor.Address;
+        if (native == null)
+            return false;
+
+        return native->Mode is CharacterModes.EmoteLoop or CharacterModes.InPositionLoop;
+    }
 
     public unsafe void Poll()
     {
