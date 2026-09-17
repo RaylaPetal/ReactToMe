@@ -14,11 +14,11 @@
       "automation"
     ],
     "DalamudApiLevel": 15,
-    "AssemblyVersion": "0.0.0.3",
+    "AssemblyVersion": "0.0.0.4",
     "IsHide": false,
     "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/RaylaPetal/ReactToMe/releases/download/v0.0.0.3/ReactToMe.zip",
-    "DownloadLinkUpdate": "https://github.com/RaylaPetal/ReactToMe/releases/download/v0.0.0.3/ReactToMe.zip",
-    "LastUpdate": "1789575018"
+    "DownloadLinkInstall": "https://github.com/RaylaPetal/ReactToMe/releases/download/v0.0.0.4/ReactToMe.zip",
+    "DownloadLinkUpdate": "https://github.com/RaylaPetal/ReactToMe/releases/download/v0.0.0.4/ReactToMe.zip",
+    "LastUpdate": "1789674661"
   }
 ]
