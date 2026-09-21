@@ -25,6 +25,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
+    [PluginService] internal static ITargetManager TargetManager { get; private set; } = null!;
     [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
     [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
     [PluginService] internal static IPluginLog Log { get; private set; } = null!;
@@ -126,11 +127,18 @@ public sealed class Plugin : IDalamudPlugin
         if (!Configuration.ReactionsEnabled)
             return;
 
-        var localPlayerId = ObjectTable.LocalPlayer?.GameObjectId;
+        var localPlayer = ObjectTable.LocalPlayer;
+        var localPlayerId = localPlayer?.GameObjectId;
         var sourceIsLocalPlayer = e.SourceGameObjectId == localPlayerId;
         var targetIsLocalPlayer = localPlayerId != null && e.TargetGameObjectId == localPlayerId;
 
-        var trigger = TriggerMatcher.FindEmoteMatch(Configuration.Triggers, e.EmoteId, sourceIsLocalPlayer, targetIsLocalPlayer, e.SourceName);
+        // Only meaningful for the OthersTargetingMe case — the local player is the observer being
+        // measured against, so a self-performed or third-party emote has nothing to classify.
+        var directionMatch = localPlayer != null && !sourceIsLocalPlayer
+            ? DirectionClassifier.Classify(localPlayer.Position, localPlayer.Rotation, e.SourcePosition)
+            : (DirectionMatch?)null;
+
+        var trigger = TriggerMatcher.FindEmoteMatch(Configuration.Triggers, e.EmoteId, sourceIsLocalPlayer, targetIsLocalPlayer, e.SourceName, directionMatch);
         if (trigger != null)
             FireReactions(trigger);
     }
@@ -179,7 +187,22 @@ public sealed class Plugin : IDalamudPlugin
         var gestureCommand = trigger.GestureEmoteId != 0 && !localPlayerBusy
             ? EmoteCatalog.GetCommand(trigger.GestureEmoteId)
             : null;
-        ChatMessageSender.Send(trigger.Id, trigger.ChatCooldownSeconds, trigger.ChatMessage, gestureCommand);
+
+        if (gestureCommand != null && trigger.KeepFacingOnGesture)
+        {
+            // Clearing the target before a targeted emote command (and restoring it right after) keeps
+            // the game's native auto-face-target behavior from rotating the local player out of position
+            // while the gesture plays. Safe to do unconditionally, including when there's no target to
+            // begin with (clearing/restoring null is a no-op).
+            var previousTarget = TargetManager.Target;
+            TargetManager.Target = null;
+            ChatMessageSender.Send(trigger.Id, trigger.ChatCooldownSeconds, trigger.ChatMessage, gestureCommand);
+            TargetManager.Target = previousTarget;
+        }
+        else
+        {
+            ChatMessageSender.Send(trigger.Id, trigger.ChatCooldownSeconds, trigger.ChatMessage, gestureCommand);
+        }
     }
 
     private void DrawWindows()

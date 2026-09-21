@@ -11,7 +11,8 @@ public static class TriggerMatcher
         uint emoteId,
         bool sourceIsLocalPlayer,
         bool targetIsLocalPlayer,
-        string? sourceName)
+        string? sourceName,
+        DirectionMatch? directionMatch)
     {
         return triggers.FirstOrDefault(t =>
             t.IsEnabled &&
@@ -20,7 +21,8 @@ public static class TriggerMatcher
             t.EmoteId != 0 &&
             t.EmoteId == emoteId &&
             MatchesScope(t.Scope, sourceIsLocalPlayer, targetIsLocalPlayer) &&
-            MatchesCharacterFilter(t.CharacterNameFilter, sourceName));
+            MatchesCharacterFilter(t.CharacterNameFilter, sourceName) &&
+            MatchesDirection(t.DirectionFilter, directionMatch));
     }
 
     public static ReactionTrigger? FindJobSkillMatch(
@@ -70,4 +72,16 @@ public static class TriggerMatcher
     /// (e.g. a world-name suffix for a cross-world sender).</summary>
     private static bool MatchesCharacterFilter(string filter, string? actualName) =>
         string.IsNullOrEmpty(filter) || (actualName != null && actualName.Contains(filter, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary><see cref="DirectionFilter.Any"/> always matches, unchanged from before this field existed.
+    /// A specific requirement (<see cref="DirectionFilter.Behind"/>/<see cref="DirectionFilter.InFront"/>)
+    /// fails closed when <paramref name="actualDirection"/> is null — i.e. when the local player's
+    /// position/facing couldn't be resolved at the moment of the emote — rather than matching anyway.</summary>
+    private static bool MatchesDirection(DirectionFilter filter, DirectionMatch? actualDirection) => filter switch
+    {
+        DirectionFilter.Any => true,
+        DirectionFilter.Behind => actualDirection == DirectionMatch.Behind,
+        DirectionFilter.InFront => actualDirection == DirectionMatch.InFront,
+        _ => false,
+    };
 }

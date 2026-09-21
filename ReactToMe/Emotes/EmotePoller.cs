@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using Dalamud.Game.ClientState.Objects.SubKinds;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
@@ -16,6 +17,11 @@ public sealed class EmotePerformedEventArgs : EventArgs
     /// matching. Null if the actor no longer resolves by the time this is read (rare — it was just polled
     /// this same frame).</summary>
     public string? SourceName { get; init; }
+
+    /// <summary>The performing character's world position at the moment the emote was polled, for
+    /// <see cref="Triggers.ReactionTrigger.DirectionFilter"/> matching against the local player's
+    /// position/facing.</summary>
+    public required Vector3 SourcePosition { get; init; }
 }
 
 /// <summary>
@@ -88,6 +94,7 @@ public sealed class EmotePoller
                 SourceGameObjectId = actorId,
                 TargetGameObjectId = targetId,
                 SourceName = playerCharacter.Name.TextValue,
+                SourcePosition = playerCharacter.Position,
             });
         }
     }

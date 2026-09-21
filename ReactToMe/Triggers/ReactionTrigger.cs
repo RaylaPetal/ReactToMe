@@ -91,6 +91,16 @@ public class ReactionTrigger
     /// <see cref="Triggers.TriggerSourceType.JobSkill"/>, both of which have a real in-game target.</summary>
     public TriggerScope Scope { get; set; } = TriggerScope.OthersTargetingMe;
 
+    /// <summary>Which side of the local player the source must be standing on, relative to the local
+    /// player's facing, for this trigger to match. Only used when <see cref="TriggerSourceType"/> is
+    /// <see cref="Triggers.TriggerSourceType.Emote"/> and <see cref="Scope"/> is
+    /// <see cref="Triggers.TriggerScope.OthersTargetingMe"/> — ignored for every other combination, the
+    /// same way <see cref="ChatPhrase"/>/<see cref="JobSkillActionId"/> are ignored outside their own
+    /// <see cref="TriggerSourceType"/>. <see cref="Triggers.DirectionFilter.Any"/> is the zero-value
+    /// default so pre-existing configs (saved before this field existed) deserialize into the old,
+    /// direction-agnostic behavior.</summary>
+    public DirectionFilter DirectionFilter { get; set; } = DirectionFilter.Any;
+
     /// <summary>Free-form substring matched case-insensitively against incoming chat messages. No fixed
     /// required prefix or suffix. Used when <see cref="TriggerSourceType"/> is
     /// <see cref="Triggers.TriggerSourceType.ChatPhrase"/>.</summary>
@@ -190,6 +200,13 @@ public class ReactionTrigger
     /// <summary>Emote for the local player to perform when this trigger fires, independent of its other
     /// reactions. Fire-and-forget: performed once per fire, not tracked for reverting. 0 = disabled.</summary>
     public uint GestureEmoteId { get; set; } = 0;
+
+    /// <summary>When true and <see cref="GestureEmoteId"/> is set, the local player's current target is
+    /// cleared immediately before the gesture command is sent and restored immediately after, so the
+    /// game's native "auto-face current target" behavior doesn't rotate the local player out of position
+    /// while performing the gesture. Only meaningful when <see cref="GestureEmoteId"/> is nonzero.
+    /// Defaults to false, matching pre-existing behavior for triggers saved before this field existed.</summary>
+    public bool KeepFacingOnGesture { get; set; } = false;
 
     public bool HasAnyAction => GlamourerDesignId != Guid.Empty || MoodleGuid != Guid.Empty
         || !string.IsNullOrWhiteSpace(ChatMessage) || PenumbraStages.Count > 0 || GestureEmoteId != 0;

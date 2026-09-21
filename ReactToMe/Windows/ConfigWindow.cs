@@ -1144,6 +1144,9 @@ public class ConfigWindow : Window, IDisposable
                 }
 
                 DrawScopeCombo(trigger);
+
+                if (trigger.Scope == TriggerScope.OthersTargetingMe)
+                    DrawDirectionCombo(trigger);
                 break;
 
             case TriggerSourceType.ChatPhrase:
@@ -1242,6 +1245,39 @@ public class ConfigWindow : Window, IDisposable
         }
     }
 
+    private void DrawDirectionCombo(ReactionTrigger trigger)
+    {
+        var directionPreview = trigger.DirectionFilter switch
+        {
+            DirectionFilter.Behind => "Behind me",
+            DirectionFilter.InFront => "In front of me",
+            _ => "Any direction",
+        };
+        if (ImGui.BeginCombo("Direction", directionPreview))
+        {
+            if (ImGui.Selectable("Any direction", trigger.DirectionFilter == DirectionFilter.Any))
+            {
+                trigger.DirectionFilter = DirectionFilter.Any;
+                configuration.Save();
+            }
+
+            if (ImGui.Selectable("Behind me", trigger.DirectionFilter == DirectionFilter.Behind))
+            {
+                trigger.DirectionFilter = DirectionFilter.Behind;
+                configuration.Save();
+            }
+
+            if (ImGui.Selectable("In front of me", trigger.DirectionFilter == DirectionFilter.InFront))
+            {
+                trigger.DirectionFilter = DirectionFilter.InFront;
+                configuration.Save();
+            }
+
+            ImGui.EndCombo();
+        }
+        DrawHelpMarker("Restricts this trigger to a 120°-wide arc directly behind or in front of you, based on where the performer was standing when they did the emote. \"Any direction\" matches regardless of facing.");
+    }
+
     private void DrawReactionsSection(ReactionTrigger trigger)
     {
         if (DrawSearchablePicker("Glamourer design", $"{trigger.Id}-design", designs, trigger.GlamourerDesignId, Guid.Empty, out var newDesignId))
@@ -1270,6 +1306,17 @@ public class ConfigWindow : Window, IDisposable
             configuration.Save();
         }
         DrawHelpMarker("Makes your character perform this emote once when the trigger fires. Fire-and-forget, like the chat message above — shares its send cooldown, and isn't reverted.");
+
+        if (trigger.GestureEmoteId != 0)
+        {
+            var keepFacing = trigger.KeepFacingOnGesture;
+            if (ImGui.Checkbox("Keep current facing", ref keepFacing))
+            {
+                trigger.KeepFacingOnGesture = keepFacing;
+                configuration.Save();
+            }
+            DrawHelpMarker("Prevents the game from auto-turning you to face your current target while this gesture plays, by briefly clearing your target for the duration of the gesture command. Useful for gestures that only make sense from a specific side (e.g. reacting from behind).");
+        }
 
         if (!string.IsNullOrWhiteSpace(trigger.ChatMessage) || trigger.GestureEmoteId != 0)
         {
